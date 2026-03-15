@@ -54,14 +54,7 @@ public class AuthController {
         return ResponseEntity.ok(new MessageResponse(I18N.getMessage(Messages.AUTH_LOGOUT_SUCCESS)));
     }
 
-    @PostMapping("/create-tenant")
-    public ResponseEntity<AuthResponse> createTenant(@Valid @RequestBody CreateTenantRequest request,
-                                                     @AuthenticationPrincipal TenantUserDetails userDetails) {
-        AuthResponse response = authService.createTenant(request, userDetails.getUserId());
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
-    }
-
-    @PostMapping("/switch-tenant")
+    @PostMapping("/switchtenant")
     public ResponseEntity<AuthResponse> switchTenant(@Valid @RequestBody SwitchTenantRequest request,
                                                      @AuthenticationPrincipal TenantUserDetails userDetails) {
         AuthResponse response = authService.switchTenant(request, userDetails.getUserId());

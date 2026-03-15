@@ -135,33 +135,6 @@ public class AuthService {
     }
 
     @Transactional
-    public AuthResponse createTenant(CreateTenantRequest request, Long userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        I18N.getMessage(Messages.RESOURCE_USER_NOT_FOUND)));
-
-        Tenant tenant = Tenant.builder()
-                .name(request.tenantName())
-                .build();
-        tenant = tenantRepository.save(tenant);
-
-        Role ownerRole = roleRepository.findByName(RoleName.OWNER.name())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        I18N.getMessage(Messages.RESOURCE_ROLE_NOT_FOUND, RoleName.OWNER.name())));
-
-        Membership membership = Membership.builder()
-                .user(user)
-                .tenant(tenant)
-                .status(MembershipStatus.ACTIVE)
-                .roles(Set.of(ownerRole))
-                .build();
-        membershipRepository.save(membership);
-
-        List<String> roles = List.of(RoleName.OWNER.name());
-        return buildAuthResponse(user, tenant, roles);
-    }
-
-    @Transactional
     public AuthResponse refresh(RefreshRequest request) {
         String tokenHash = TokenHashUtil.sha256(request.refreshToken());
         RefreshToken storedToken = refreshTokenRepository.findByTokenHash(tokenHash)
