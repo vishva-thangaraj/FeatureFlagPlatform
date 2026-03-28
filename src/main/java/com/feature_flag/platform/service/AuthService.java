@@ -14,6 +14,8 @@ import com.feature_flag.platform.entity.RefreshToken;
 import com.feature_flag.platform.entity.Role;
 import com.feature_flag.platform.entity.Tenant;
 import com.feature_flag.platform.entity.User;
+import com.feature_flag.platform.entity.UserInvitation;
+import com.feature_flag.platform.enums.InvitationStatus;
 import com.feature_flag.platform.enums.MembershipStatus;
 import com.feature_flag.platform.enums.RoleName;
 import com.feature_flag.platform.enums.UserStatus;
@@ -27,6 +29,7 @@ import com.feature_flag.platform.repository.MembershipRepository;
 import com.feature_flag.platform.repository.RefreshTokenRepository;
 import com.feature_flag.platform.repository.RoleRepository;
 import com.feature_flag.platform.repository.TenantRepository;
+import com.feature_flag.platform.repository.UserInvitationRepository;
 import com.feature_flag.platform.repository.UserRepository;
 import com.feature_flag.platform.security.JwtTokenProvider;
 import com.feature_flag.platform.security.TokenHashUtil;
@@ -47,6 +50,7 @@ public class AuthService {
     private final MembershipRepository membershipRepository;
     private final RoleRepository roleRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final UserInvitationRepository userInvitationRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final JwtProperties jwtProperties;
     private final PasswordEncoder passwordEncoder;
@@ -56,6 +60,7 @@ public class AuthService {
                        MembershipRepository membershipRepository,
                        RoleRepository roleRepository,
                        RefreshTokenRepository refreshTokenRepository,
+                       UserInvitationRepository userInvitationRepository,
                        JwtTokenProvider jwtTokenProvider,
                        JwtProperties jwtProperties,
                        PasswordEncoder passwordEncoder) {
@@ -64,6 +69,7 @@ public class AuthService {
         this.membershipRepository = membershipRepository;
         this.roleRepository = roleRepository;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.userInvitationRepository = userInvitationRepository;
         this.jwtTokenProvider = jwtTokenProvider;
         this.jwtProperties = jwtProperties;
         this.passwordEncoder = passwordEncoder;
@@ -84,6 +90,23 @@ public class AuthService {
                 .status(UserStatus.ACTIVE)
                 .build();
         user = userRepository.save(user);
+
+        // Auto-link any validated invitations for this email
+        List<UserInvitation> validatedInvitations = userInvitationRepository
+                .findByEmailAndStatus(request.email(), InvitationStatus.VALIDATED);
+        for (UserInvitation invitation : validatedInvitations) {
+            Role invitationRole = roleRepository.findByName(invitation.getRole().name())
+                    .orElseThrow();
+            Membership membership = Membership.builder()
+                    .user(user)
+                    .tenant(invitation.getTenant())
+                    .roles(Set.of(invitationRole))
+                    .status(MembershipStatus.ACTIVE)
+                    .build();
+            membershipRepository.save(membership);
+            invitation.setStatus(InvitationStatus.ACCEPTED);
+            userInvitationRepository.save(invitation);
+        }
 
         // No tenant context — user just signed up without an org
         return buildAuthResponse(user, null, Collections.emptyList());

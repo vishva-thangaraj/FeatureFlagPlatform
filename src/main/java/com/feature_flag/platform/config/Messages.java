@@ -22,6 +22,13 @@ public final class Messages {
     public static final String TENANT_MEMBERSHIP_NOT_ACTIVE = "tenant.membership.not.active";
     public static final String TENANT_MEMBERSHIP_NO_LONGER_EXISTS = "tenant.membership.no.longer.exists";
     public static final String TENANT_MEMBERSHIP_NO_LONGER_ACTIVE = "tenant.membership.no.longer.active";
+    public static final String RESOURCE_TENANT_NOT_FOUND = "resource.tenant.not.found";
+
+    // User Invitation
+    public static final String USER_INVITATION_ALREADY_EXISTS = "user.invitation.already.exists";
+    public static final String INVITATION_TOKEN_INVALID = "invitation.token.invalid";
+    public static final String INVITATION_ALREADY_PROCESSED = "invitation.already.processed";
+    public static final String INVITATION_EXPIRED = "invitation.expired";
 
     // Resource
     public static final String RESOURCE_USER_NOT_FOUND = "resource.user.not.found";

@@ -4,6 +4,7 @@ package com.feature_flag.platform.controller;
 import com.feature_flag.platform.dto.tenant.TenantCreationRequest;
 import com.feature_flag.platform.dto.tenant.TenantList;
 import com.feature_flag.platform.dto.tenant.TenantResponse;
+import com.feature_flag.platform.dto.tenant.UserInviteRequest;
 import com.feature_flag.platform.security.TenantUserDetails;
 import com.feature_flag.platform.service.TenantService;
 import jakarta.validation.Valid;
@@ -31,6 +32,14 @@ public class TenantController {
         TenantResponse response = tenantService.createTenant(tenant, userDetails);
 
         return ResponseEntity.status(HttpStatusCode.valueOf(201)).body(response);
+    }
+
+    @PostMapping("/invite")
+    public ResponseEntity<Void> inviteUserToTenant(@Valid @RequestBody UserInviteRequest userInviteRequest, @AuthenticationPrincipal TenantUserDetails userDetails) {
+        tenantService.inviteUserToTenant(userDetails, userInviteRequest.email(), userInviteRequest.role());
+
+        return ResponseEntity.ok().build();
+
     }
 
     @GetMapping

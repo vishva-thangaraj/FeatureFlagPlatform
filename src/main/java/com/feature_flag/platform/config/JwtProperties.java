@@ -16,4 +16,6 @@ public class JwtProperties {
     private long accessTokenExpirationMs = 900_000; // 15 minutes
 
     private long refreshTokenExpirationMs = 604_800_000; // 7 days
+
+    private long invitationExpirationMs = 604_800_000; // 24 hours
 }
