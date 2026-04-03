@@ -1,6 +1,7 @@
 package com.feature_flag.platform.notification.service;
 
 import com.feature_flag.platform.common.config.AppProperties;
+import com.feature_flag.platform.notification.EmailNotificationAdaptor;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
@@ -14,13 +15,12 @@ import org.springframework.stereotype.Service;
 public class EmailServiceImpl implements EmailService {
 
     private static final Logger log = LoggerFactory.getLogger(EmailServiceImpl.class);
-
-    private final JavaMailSender mailSender;
     private final AppProperties appProperties;
+    private final EmailNotificationAdaptor emailNotificationAdaptor;
 
-    public EmailServiceImpl(JavaMailSender mailSender, AppProperties appProperties) {
-        this.mailSender = mailSender;
+    public EmailServiceImpl(AppProperties appProperties, EmailNotificationAdaptor emailNotificationAdaptor) {
         this.appProperties = appProperties;
+        this.emailNotificationAdaptor = emailNotificationAdaptor;
     }
 
     @Override
@@ -41,15 +41,9 @@ public class EmailServiceImpl implements EmailService {
                     </body>
                     </html>
                     """.formatted(tenantName, acceptUrl);
+            String subject = "Invitation to join " + tenantName;
 
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true);
-            helper.setFrom(appProperties.getMail().getFrom());
-            helper.setTo(toEmail);
-            helper.setSubject("Invitation to join " + tenantName);
-            helper.setText(html, true);
-
-            mailSender.send(message);
+            emailNotificationAdaptor.sendEmail(toEmail, html, subject, true);
             log.info("Invitation email sent to {}", toEmail);
         } catch (MessagingException e) {
             log.error("Failed to send invitation email to {}", toEmail, e);
