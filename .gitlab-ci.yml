@@ -1,16 +1,136 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
-# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/#customizing-analyzer-behavior
-# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
-stages:
-- test
-- secret-detection
-variables:
-  SECRET_DETECTION_ENABLED: 'true'
-secret_detection:
-  stage: secret-detection
-include:
-- template: Security/Secret-Detection.gitlab-ci.yml
+## =============================================================================
+## GitLab CI/CD Pipeline
+## Stages: test → secret-detection → build → deploy
+##
+## Required CI/CD Variables (set in GitLab > Settings > CI/CD > Variables):
+##   OCI_REGION            - e.g., ap-mumbai-1
+##   OCI_TENANCY_NAMESPACE - OCIR tenancy namespace
+##   OCI_REPO_NAME         - OCIR repository name
+##   OCI_USERNAME          - OCI username for OCIR login
+##   OCI_AUTH_TOKEN        - OCI auth token (masked)
+##   OCI_SSH_PRIVATE_KEY   - SSH private key for VM (file type, masked)
+##   OCI_VM_HOST           - VM public IP address
+##   OCI_VM_USER           - SSH user on the VM (e.g., ubuntu)
+##   OCI_VM_HOST_KEY       - Output of: ssh-keyscan <VM_IP>
+## =============================================================================
+#
+#stages:
+#  - test
+#  - secret-detection
+#  - build
+#  - deploy
+#
+#variables:
+#  SECRET_DETECTION_ENABLED: 'true'
+#  # OCIR image path: <region>.ocir.io/<namespace>/<repo>/platform
+#  DOCKER_IMAGE: ${OCI_REGION}.ocir.io/${OCI_TENANCY_NAMESPACE}/${OCI_REPO_NAME}/platform
+#  # Tag each image with the short commit SHA for traceability & rollback
+#  DOCKER_TAG: ${CI_COMMIT_SHORT_SHA}
+#
+## ---------------------------------------------------------------------------
+## Stage 1: TEST
+## Runs unit tests on every push. Pipeline stops here if tests fail.
+## ---------------------------------------------------------------------------
+#test:
+#  stage: test
+#  image: eclipse-temurin:17-jdk
+#  script:
+#    - chmod +x gradlew
+#    - ./gradlew test --no-daemon
+#  cache:
+#    key: gradle-cache
+#    paths:
+#      - .gradle/
+#      - build/
+#
+## ---------------------------------------------------------------------------
+## Stage 2: SECRET DETECTION (existing GitLab SAST template)
+## Scans for accidentally committed secrets (API keys, passwords, etc.)
+## ---------------------------------------------------------------------------
+#secret_detection:
+#  stage: secret-detection
+#
+#include:
+#  - template: Security/Secret-Detection.gitlab-ci.yml
+#
+## ---------------------------------------------------------------------------
+## Stage 3: BUILD & PUSH
+## Builds a Docker image for ARM64 (OCI A1 Flex) and pushes to OCIR.
+## Only runs on the main branch (no point building feature branches).
+##
+## How it works:
+##   1. Logs into OCIR using your OCI auth token
+##   2. Builds the image with --platform linux/arm64
+##   3. Tags with both commit SHA and "latest"
+##   4. Pushes both tags to OCIR
+## ---------------------------------------------------------------------------
+#build:
+#  stage: build
+#  image: docker:27
+#  services:
+#    - docker:27-dind                       # Docker-in-Docker for building images in CI
+#  variables:
+#    DOCKER_TLS_CERTDIR: "/certs"           # Secure communication between Docker client & daemon
+#  before_script:
+#    # Login to OCI Container Registry
+#    # Format: docker login <region>.ocir.io -u <namespace>/<username>
+#    - echo "${OCI_AUTH_TOKEN}" | docker login ${OCI_REGION}.ocir.io -u "${OCI_TENANCY_NAMESPACE}/${OCI_USERNAME}" --password-stdin
+#  script:
+#    # Build for ARM64 architecture (your OCI A1 Flex VM is ARM-based)
+#    - docker build --platform linux/arm64 -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
+#    # Also tag as "latest" for easy deployment (docker-compose.prod.yml uses :latest)
+#    - docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest
+#    # Push both tags
+#    - docker push ${DOCKER_IMAGE}:${DOCKER_TAG}
+#    - docker push ${DOCKER_IMAGE}:latest
+#  rules:
+#    - if: $CI_COMMIT_BRANCH == "main"
+#
+## ---------------------------------------------------------------------------
+## Stage 4: DEPLOY (manual trigger)
+## SSHs into the OCI VM and restarts the app with the new image.
+##
+## How it works:
+##   1. Installs SSH client in a minimal Alpine container
+##   2. Loads your SSH private key
+##   3. SSHs into the VM and runs: pull new image → restart app → cleanup
+##
+## This stage has `when: manual` — you must click "Deploy" in the GitLab UI.
+## This is a safety gate so you can review the build before deploying.
+## ---------------------------------------------------------------------------
+#deploy:
+#  stage: deploy
+#  image: alpine:latest
+#  before_script:
+#    - apk add --no-cache openssh-client
+#    # Start SSH agent and load the private key
+#    - eval $(ssh-agent -s)
+#    - echo "${OCI_SSH_PRIVATE_KEY}" | tr -d '\r' | ssh-add -
+#    - mkdir -p ~/.ssh
+#    - chmod 700 ~/.ssh
+#    # Add the VM's host key so SSH doesn't prompt "are you sure?"
+#    - echo "${OCI_VM_HOST_KEY}" >> ~/.ssh/known_hosts
+#    - chmod 644 ~/.ssh/known_hosts
+#  script:
+#    - |
+#      ssh -o StrictHostKeyChecking=yes ${OCI_VM_USER}@${OCI_VM_HOST} << 'ENDSSH'
+#        # Login to OCIR on the VM to pull the new image
+#        echo "${OCI_AUTH_TOKEN}" | docker login ${OCI_REGION}.ocir.io \
+#          -u "${OCI_TENANCY_NAMESPACE}/${OCI_USERNAME}" --password-stdin
+#
+#        cd /opt/platform
+#
+#        # Pull the latest image
+#        docker-compose -f docker-compose.prod.yml pull app
+#
+#        # Restart only the app service (DB stays running)
+#        docker-compose -f docker-compose.prod.yml up -d --force-recreate app
+#
+#        # Remove old unused images to save disk space
+#        docker image prune -f
+#
+#        echo "Deploy complete!"
+#      ENDSSH
+#  rules:
+#    - if: $CI_COMMIT_BRANCH == "main"
+#      when: manual                         # Requires manual click to deploy

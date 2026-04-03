@@ -38,3 +38,6 @@ out/
 
 ### Environment ###
 .env
+.env.prod
+.env.local
+/Wallet_TD92XTJ4048ZUUGK

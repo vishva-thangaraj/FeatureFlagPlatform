@@ -1,19 +1,26 @@
+# Dev Docker Compose
+# Nginx on port 80: /api/* → Spring Boot, /* → React dev server
+# Configure DB connection in .env file (see .env.example)
+
 services:
-  db:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  nginx:
+    image: nginx:alpine
     ports:
-      - "${DB_PORT:-5432}:5432"
+      - "80:80"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+      - frontend
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    volumes:
+      - ${FRONTEND_PATH:-../frontend}:/app
+      - frontend_node_modules:/app/node_modules
+    # No ports exposed — Nginx proxies to this container
 
   mailpit:
     image: axllent/mailpit:latest
@@ -28,19 +35,18 @@ services:
     build: .
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB}
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:-dGhpcy1pcy1hLWRldi1vbmx5LWp3dC1zZWNyZXQta2V5LTMyYg==}
       MAIL_HOST: mailpit
       MAIL_PORT: 1025
-      SERVER_PORT: ${SERVER_PORT:-8080}
-    ports:
-      - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
+      SERVER_PORT: 8080
+    volumes:
+      - ${WALLET_PATH:-./wallet}:/opt/oracle/wallet:ro
     depends_on:
-      db:
-        condition: service_healthy
       mailpit:
         condition: service_started
 
 volumes:
-  pgdata:
+  frontend_node_modules:
