@@ -83,11 +83,10 @@ public class InvitationServiceImpl implements InvitationService {
             createMembership(existingUser.get(), invitation);
             invitation.setStatus(InvitationStatus.ACCEPTED);
             userInvitationRepository.save(invitation);
-            return new InvitationResponse("Invitation accepted", true);
+            return new InvitationResponse("Invitation accepted", InvitationStatus.ACCEPTED);
         } else {
-            invitation.setStatus(InvitationStatus.VALIDATED);
-            userInvitationRepository.save(invitation);
-            return new InvitationResponse("Please register to complete your invitation", false);
+
+            return new InvitationResponse("Please register to complete your invitation", InvitationStatus.PENDING);
         }
     }
 
@@ -133,6 +132,43 @@ public class InvitationServiceImpl implements InvitationService {
         userInvitationRepository.save(invitation);
 
         emailService.sendInvitationEmail(email, tenant.getName(), rawToken);
+    }
+
+    @Override
+    public InvitationResponse getStatus(String token) {
+        String tokenHash = TokenHashUtil.sha256(token);
+
+        UserInvitation invitation  = userInvitationRepository.findByTokenHash(tokenHash)
+                .orElseThrow(() -> new InvalidTokenException(
+                        I18N.getMessage(Messages.INVITATION_TOKEN_INVALID)));
+
+        InvitationStatus status = invitation.getStatus();
+
+        String email = invitation.getEmail();
+
+        Optional<User> userOpt = userRepository.findByEmail(email);
+        if(userOpt.isEmpty() && status == InvitationStatus.PENDING)
+        {
+            return new InvitationResponse("Invitation is pending. Please register to accept the invitation.", status);
+        }
+        return new InvitationResponse("Invitation status: " + status.name(), status);
+    }
+
+    @Override
+    public void declineInvitation(String token) {
+        String tokenHash = TokenHashUtil.sha256(token);
+
+        UserInvitation invitation  = userInvitationRepository.findByTokenHash(tokenHash)
+                .orElseThrow(() -> new InvalidTokenException(
+                        I18N.getMessage(Messages.INVITATION_TOKEN_INVALID)));
+
+        if (invitation.getStatus() != InvitationStatus.PENDING) {
+            throw new IllegalStateException(
+                    I18N.getMessage(Messages.INVITATION_ALREADY_PROCESSED));
+        }
+
+        invitation.setStatus(InvitationStatus.DECLINED);
+        userInvitationRepository.save(invitation);
     }
 
     private void createMembership(User user, UserInvitation invitation) {

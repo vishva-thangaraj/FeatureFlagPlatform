@@ -8,4 +8,8 @@ public interface InvitationService {
     InvitationResponse acceptInvitation(String rawToken);
 
     void inviteUserToTenant(TenantUserDetails userDetails, String email, String role);
+
+    InvitationResponse getStatus(String token);
+
+    void declineInvitation(String token);
 }
