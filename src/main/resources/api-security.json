@@ -1,0 +1,110 @@
+{
+  "defaults": {
+    "authRequired": true,
+    "throttle": {
+      "requestsPerMinute": 60,
+      "burstSize": 10
+    }
+  },
+  "endpoints": [
+    {
+      "path": "/api/v1/auth/register",
+      "method": "POST",
+      "authRequired": false,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 10,
+        "burstSize": 3
+      },
+      "allowedParams": ["email", "password", "firstName", "lastName"]
+    },
+    {
+      "path": "/api/v1/auth/login",
+      "method": "POST",
+      "authRequired": false,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["email", "password", "tenantId"]
+    },
+    {
+      "path": "/api/v1/auth/refresh",
+      "method": "POST",
+      "authRequired": false,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 30,
+        "burstSize": 5
+      },
+      "allowedParams": ["refreshToken"]
+    },
+    {
+      "path": "/api/v1/auth/logout",
+      "method": "POST",
+      "authRequired": false,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 30,
+        "burstSize": 5
+      },
+      "allowedParams": ["refreshToken"]
+    },
+    {
+      "path": "/api/v1/auth/switch-tenant",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN", "MEMBER", "VIEWER"],
+      "throttle": {
+        "requestsPerMinute": 30,
+        "burstSize": 5
+      },
+      "allowedParams": ["tenantId"]
+    },
+    {
+      "path": "/api/v1/tenants",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN", "MEMBER", "VIEWER", "SUPER_ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 10,
+        "burstSize": 3
+      },
+      "allowedParams": ["name"]
+    },
+    {
+      "path": "/api/v1/tenants",
+      "method": "GET",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN", "MEMBER", "VIEWER", "SUPER_ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      },
+      "allowedParams": ["page", "size"]
+    },
+    {
+      "path": "/api/v1/invitations",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["email", "roleName"]
+    },
+    {
+      "path": "/api/v1/invitations/accept",
+      "method": "GET",
+      "authRequired": false,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["token"]
+    }
+  ]
+}
