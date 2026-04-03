@@ -1,6 +1,6 @@
 package com.feature_flag.platform.util;
 
-import com.feature_flag.platform.entity.BaseEntity;
+import com.feature_flag.platform.common.entity.BaseEntity;
 
 import java.lang.reflect.Field;
 
