@@ -1,30 +1,35 @@
-package com.feature_flag.platform.invitation.service;
+package com.feature_flag.platform.tenant.service;
 
+import com.feature_flag.platform.auth.dto.AuthResponse;
 import com.feature_flag.platform.auth.entity.User;
 import com.feature_flag.platform.auth.enums.RoleName;
 import com.feature_flag.platform.auth.repository.RoleRepository;
 import com.feature_flag.platform.auth.repository.UserRepository;
+import com.feature_flag.platform.auth.service.TokenService;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.InvalidTokenException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
+import com.feature_flag.platform.common.exception.UnauthorizedException;
 import com.feature_flag.platform.common.security.JwtProperties;
 import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.common.security.TokenHashUtil;
-import com.feature_flag.platform.invitation.dto.InvitationResponse;
-import com.feature_flag.platform.invitation.entity.UserInvitation;
-import com.feature_flag.platform.invitation.enums.InvitationStatus;
-import com.feature_flag.platform.invitation.repository.UserInvitationRepository;
+import com.feature_flag.platform.tenant.dto.InvitationResponse;
+import com.feature_flag.platform.tenant.entity.UserInvitation;
+import com.feature_flag.platform.tenant.enums.InvitationStatus;
+import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
 import com.feature_flag.platform.notification.service.EmailService;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
 import com.feature_flag.platform.tenant.repository.MembershipRepository;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -39,6 +44,7 @@ public class InvitationServiceImpl implements InvitationService {
     private final TenantRepository tenantRepository;
     private final JwtProperties jwtProperties;
     private final EmailService emailService;
+    private final TokenService tokenService;
 
     public InvitationServiceImpl(UserInvitationRepository userInvitationRepository,
                                  UserRepository userRepository,
@@ -46,7 +52,7 @@ public class InvitationServiceImpl implements InvitationService {
                                  RoleRepository roleRepository,
                                  TenantRepository tenantRepository,
                                  JwtProperties jwtProperties,
-                                 EmailService emailService) {
+                                 EmailService emailService, TokenService tokenService) {
         this.userInvitationRepository = userInvitationRepository;
         this.userRepository = userRepository;
         this.membershipRepository = membershipRepository;
@@ -54,6 +60,7 @@ public class InvitationServiceImpl implements InvitationService {
         this.tenantRepository = tenantRepository;
         this.jwtProperties = jwtProperties;
         this.emailService = emailService;
+        this.tokenService = tokenService;
     }
 
     @Override
@@ -80,13 +87,19 @@ public class InvitationServiceImpl implements InvitationService {
         Optional<User> existingUser = userRepository.findByEmail(invitation.getEmail());
 
         if (existingUser.isPresent()) {
+            if(SecurityContextHolder.getContext().getAuthentication() == null)
+            {
+                throw new UnauthorizedException(
+                        I18N.getMessage(Messages.UNAUTHORIZED));
+            }
             createMembership(existingUser.get(), invitation);
             invitation.setStatus(InvitationStatus.ACCEPTED);
             userInvitationRepository.save(invitation);
-            return new InvitationResponse("Invitation accepted", InvitationStatus.ACCEPTED);
+            AuthResponse authResponse = tokenService.createTokenPair(existingUser.get(), null, Collections.emptyList());
+            return new InvitationResponse("Invitation accepted", InvitationStatus.ACCEPTED, authResponse);
         } else {
 
-            return new InvitationResponse("Please register to complete your invitation", InvitationStatus.PENDING);
+            return new InvitationResponse("Please register to complete your invitation", InvitationStatus.PENDING_UNREGISTERED, null);
         }
     }
 
@@ -149,9 +162,9 @@ public class InvitationServiceImpl implements InvitationService {
         Optional<User> userOpt = userRepository.findByEmail(email);
         if(userOpt.isEmpty() && status == InvitationStatus.PENDING)
         {
-            return new InvitationResponse("Invitation is pending. Please register to accept the invitation.", status);
+            return new InvitationResponse("Invitation is pending. Please register to accept the invitation.", status, null);
         }
-        return new InvitationResponse("Invitation status: " + status.name(), status);
+        return new InvitationResponse("Invitation status: " + status.name(), status, null);
     }
 
     @Override

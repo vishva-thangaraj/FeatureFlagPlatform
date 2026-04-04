@@ -1,7 +1,7 @@
-package com.feature_flag.platform.invitation.service;
+package com.feature_flag.platform.tenant.service;
 
 import com.feature_flag.platform.common.security.TenantUserDetails;
-import com.feature_flag.platform.invitation.dto.InvitationResponse;
+import com.feature_flag.platform.tenant.dto.InvitationResponse;
 
 public interface InvitationService {
 

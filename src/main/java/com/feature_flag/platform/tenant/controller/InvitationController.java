@@ -1,11 +1,11 @@
-package com.feature_flag.platform.invitation.controller;
+package com.feature_flag.platform.tenant.controller;
 
 import com.feature_flag.platform.auth.dto.RegisterRequest;
 import com.feature_flag.platform.auth.service.AuthService;
 import com.feature_flag.platform.common.security.TenantUserDetails;
-import com.feature_flag.platform.invitation.dto.InvitationResponse;
-import com.feature_flag.platform.invitation.dto.UserInviteRequest;
-import com.feature_flag.platform.invitation.service.InvitationService;
+import com.feature_flag.platform.tenant.dto.InvitationResponse;
+import com.feature_flag.platform.tenant.dto.UserInviteRequest;
+import com.feature_flag.platform.tenant.service.InvitationService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
