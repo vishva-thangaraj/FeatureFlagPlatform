@@ -1,7 +1,7 @@
-package com.feature_flag.platform.invitation.repository;
+package com.feature_flag.platform.tenant.repository;
 
-import com.feature_flag.platform.invitation.entity.UserInvitation;
-import com.feature_flag.platform.invitation.enums.InvitationStatus;
+import com.feature_flag.platform.tenant.entity.UserInvitation;
+import com.feature_flag.platform.tenant.enums.InvitationStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 

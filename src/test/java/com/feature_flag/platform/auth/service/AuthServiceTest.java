@@ -15,7 +15,7 @@ import com.feature_flag.platform.common.exception.InvalidCredentialsException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
 import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
 import com.feature_flag.platform.common.exception.UserSuspendedException;
-import com.feature_flag.platform.invitation.repository.UserInvitationRepository;
+import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
