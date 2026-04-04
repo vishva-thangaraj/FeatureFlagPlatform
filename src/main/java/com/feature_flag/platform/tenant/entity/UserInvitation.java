@@ -1,10 +1,9 @@
-package com.feature_flag.platform.invitation.entity;
+package com.feature_flag.platform.tenant.entity;
 
 import com.feature_flag.platform.auth.entity.User;
 import com.feature_flag.platform.auth.enums.RoleName;
 import com.feature_flag.platform.common.entity.BaseEntity;
-import com.feature_flag.platform.invitation.enums.InvitationStatus;
-import com.feature_flag.platform.tenant.entity.Tenant;
+import com.feature_flag.platform.tenant.enums.InvitationStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

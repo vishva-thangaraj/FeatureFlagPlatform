@@ -1,4 +1,4 @@
-package com.feature_flag.platform.invitation.dto;
+package com.feature_flag.platform.tenant.dto;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;

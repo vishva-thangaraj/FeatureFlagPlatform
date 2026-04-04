@@ -10,6 +10,7 @@ public final class Messages {
     public static final String AUTH_INVALID_CREDENTIALS = "auth.invalid.credentials";
     public static final String AUTH_USER_SUSPENDED = "auth.user.suspended";
     public static final String AUTH_LOGOUT_SUCCESS = "auth.logout.success";
+    public static final String UNAUTHORIZED = "auth.user.unauthorized";
 
     // Token
     public static final String TOKEN_INVALID = "token.invalid";
