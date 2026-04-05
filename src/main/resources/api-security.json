@@ -83,6 +83,83 @@
       "allowedParams": ["page", "size"]
     },
     {
+      "path": "/api/v1/tenants/*",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/tenants/*",
+      "method": "PUT",
+      "authRequired": true,
+      "roles": ["OWNER"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["name"]
+    },
+    {
+      "path": "/api/v1/tenants/*",
+      "method": "DELETE",
+      "authRequired": true,
+      "roles": ["OWNER"],
+      "throttle": {
+        "requestsPerMinute": 10,
+        "burstSize": 3
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/members",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/members/*",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/members/*/role",
+      "method": "PUT",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["roleName"]
+    },
+    {
+      "path": "/api/v1/members/*",
+      "method": "DELETE",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": []
+    },
+    {
       "path": "/api/v1/invitations",
       "method": "POST",
       "authRequired": true,
