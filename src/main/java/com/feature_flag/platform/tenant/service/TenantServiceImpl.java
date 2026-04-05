@@ -7,11 +7,13 @@ import com.feature_flag.platform.auth.repository.RoleRepository;
 import com.feature_flag.platform.auth.repository.UserRepository;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
+import com.feature_flag.platform.common.exception.ForbiddenException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
 import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.tenant.dto.TenantCreationRequest;
 import com.feature_flag.platform.tenant.dto.TenantList;
 import com.feature_flag.platform.tenant.dto.TenantResponse;
+import com.feature_flag.platform.tenant.dto.UpdateTenantRequest;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
@@ -85,5 +87,40 @@ public class TenantServiceImpl implements TenantService {
                 .toList();
 
         return new TenantList(tenantResponses);
+    }
+
+    @Override
+    public TenantResponse getTenant(Long tenantId, TenantUserDetails userDetails) {
+        Membership membership = membershipRepository.findByUserIdAndTenantId(userDetails.getUserId(), tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_TENANT_NOT_FOUND)));
+
+        return tenantMapper.toTenantResponse(membership);
+    }
+
+    @Override
+    @Transactional
+    public TenantResponse updateTenant(Long tenantId, UpdateTenantRequest request, TenantUserDetails userDetails) {
+        Membership membership = membershipRepository.findByUserIdAndTenantId(userDetails.getUserId(), tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_TENANT_NOT_FOUND)));
+
+        Tenant tenant = membership.getTenant();
+        if (request.name() != null) {
+            tenant.setName(request.name());
+        }
+        tenantRepository.save(tenant);
+
+        return tenantMapper.toTenantResponse(membership);
+    }
+
+    @Override
+    @Transactional
+    public void deleteTenant(Long tenantId, TenantUserDetails userDetails) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_TENANT_NOT_FOUND)));
+
+        tenantRepository.delete(tenant);
     }
 }
