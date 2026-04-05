@@ -34,6 +34,9 @@ public final class Messages {
     // Resource
     public static final String RESOURCE_USER_NOT_FOUND = "resource.user.not.found";
     public static final String RESOURCE_ROLE_NOT_FOUND = "resource.role.not.found";
+    public static final String RESOURCE_MEMBERSHIP_NOT_FOUND = "resource.membership.not.found";
+    public static final String TENANT_CANNOT_REMOVE_OWNER = "tenant.cannot.remove.owner";
+    public static final String TENANT_CANNOT_CHANGE_OWNER_ROLE = "tenant.cannot.change.owner.role";
 
 
     //Feature
