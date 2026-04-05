@@ -125,6 +125,116 @@
         "burstSize": 5
       },
       "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["key", "description"]
+    },
+    {
+      "path": "/api/v1/features",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*",
+      "method": "PUT",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["description"]
+    },
+    {
+      "path": "/api/v1/features/*",
+      "method": "DELETE",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/envs",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["name", "description"]
+    },
+    {
+      "path": "/api/v1/envs",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/envs/*",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/envs/*",
+      "method": "PUT",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": ["name", "description"]
+    },
+    {
+      "path": "/api/v1/envs/*",
+      "method": "DELETE",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      },
+      "allowedParams": []
     }
   ]
 }

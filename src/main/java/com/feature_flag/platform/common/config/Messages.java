@@ -34,4 +34,14 @@ public final class Messages {
     // Resource
     public static final String RESOURCE_USER_NOT_FOUND = "resource.user.not.found";
     public static final String RESOURCE_ROLE_NOT_FOUND = "resource.role.not.found";
+
+
+    //Feature
+    public static final String FEATURE_KEY_ALREADY_EXISTS = "feature.key.already.exists";
+
+    public static final String RESOURCE_FEATURE_NOT_FOUND = "resource.feature.not.found";
+
+    //ENV
+    public static final String ENV_NAME_ALREADY_EXISTS = "env.name.already.exists";
+    public static final String RESOURCE_ENV_NOT_FOUND = "resource.env.not.found";
 }
