@@ -41,4 +41,4 @@ out/
 .env.prod
 .env.local
 /Wallet_TD92XTJ4048ZUUGK
-/.claude
+/.claude/
