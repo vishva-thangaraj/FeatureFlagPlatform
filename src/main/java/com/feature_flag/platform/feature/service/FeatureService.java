@@ -4,15 +4,17 @@ import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.ConflictException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
-import com.feature_flag.platform.feature.dto.CreateFeatureRequest;
-import com.feature_flag.platform.feature.dto.FeatureListResponse;
-import com.feature_flag.platform.feature.dto.FeatureResponse;
-import com.feature_flag.platform.feature.dto.UpdateFeatureRequest;
+import com.feature_flag.platform.feature.dto.*;
+import com.feature_flag.platform.feature.entity.Env;
 import com.feature_flag.platform.feature.entity.Feature;
+import com.feature_flag.platform.feature.entity.FeatureEnvStatus;
 import com.feature_flag.platform.feature.mapper.FeatureMapper;
+import com.feature_flag.platform.feature.repository.EnvRepository;
+import com.feature_flag.platform.feature.repository.FeatureEnvStatusRepository;
 import com.feature_flag.platform.feature.repository.FeatureRepository;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
+import jakarta.validation.Valid;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,10 +24,14 @@ import java.util.List;
 public class FeatureService {
     private final FeatureRepository featureRepository;
     private final TenantRepository tenantRepository;
+    private final EnvRepository envRepository;
+    private final FeatureEnvStatusRepository featureEnvStatusRepository;
 
-    public FeatureService(FeatureRepository featureRepository, TenantRepository tenantRepository) {
+    public FeatureService(FeatureRepository featureRepository, TenantRepository tenantRepository, EnvRepository envRepository, FeatureEnvStatusRepository featureEnvStatusRepository) {
         this.featureRepository = featureRepository;
         this.tenantRepository = tenantRepository;
+        this.envRepository = envRepository;
+        this.featureEnvStatusRepository = featureEnvStatusRepository;
     }
 
     @Transactional
@@ -78,5 +84,23 @@ public class FeatureService {
         return featureRepository.findById(featureId)
                 .filter(f -> f.getTenant().getId().equals(tenantId))
                 .orElseThrow(() -> new ResourceNotFoundException(I18N.getMessage(Messages.RESOURCE_FEATURE_NOT_FOUND)));
+    }
+
+    @Transactional
+    public void setFeatureStatus(Long featureId, @Valid FeatureEnableRequest request, Long tenantId) {
+        Feature feature =findByIdAndTenant(featureId, tenantId);
+
+        Long envID = request.envId();
+
+        Env env = envRepository.findById(envID)
+                .orElseThrow(() -> new ResourceNotFoundException(I18N.getMessage(Messages.RESOURCE_ENV_NOT_FOUND)));
+
+        FeatureEnvStatus featureEnvStatus = featureEnvStatusRepository.findByFeatureIdAndEnvId(featureId, envID)
+                .orElseGet(() -> FeatureEnvStatus.builder()
+                        .feature(feature)
+                        .env(env)
+                        .build());
+        featureEnvStatus.setEnabled(request.enabled());
+        featureEnvStatusRepository.save(featureEnvStatus);
     }
 }

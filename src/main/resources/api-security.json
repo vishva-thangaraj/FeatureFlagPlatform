@@ -312,6 +312,17 @@
         "burstSize": 5
       },
       "allowedParams": []
+    },
+    {
+      "path" :"/api/v1/features/*/enable",
+        "method": "POST",
+        "authRequired": true,
+        "roles": ["OWNER", "ADMIN"],
+        "throttle": {
+          "requestsPerMinute": 20,
+          "burstSize": 5
+        },
+        "allowedParams": ["envId","enable"]
     }
   ]
 }
