@@ -1,10 +1,7 @@
 package com.feature_flag.platform.feature.controller;
 
 import com.feature_flag.platform.common.security.TenantUserDetails;
-import com.feature_flag.platform.feature.dto.CreateFeatureRequest;
-import com.feature_flag.platform.feature.dto.FeatureListResponse;
-import com.feature_flag.platform.feature.dto.FeatureResponse;
-import com.feature_flag.platform.feature.dto.UpdateFeatureRequest;
+import com.feature_flag.platform.feature.dto.*;
 import com.feature_flag.platform.feature.service.FeatureService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -54,5 +51,12 @@ public class FeatureController {
                                               @AuthenticationPrincipal TenantUserDetails userDetails) {
         featureService.deleteFeature(featureId, userDetails.getTenantId());
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{featureId}/enable")
+    public ResponseEntity<Void> enableFeature(@PathVariable Long featureId,@Valid @RequestBody FeatureEnableRequest request,
+                                              @AuthenticationPrincipal TenantUserDetails userDetails) {
+        featureService.setFeatureStatus(featureId, request, userDetails.getTenantId());
+        return ResponseEntity.ok().build();
     }
 }
