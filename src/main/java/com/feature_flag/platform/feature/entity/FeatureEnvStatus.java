@@ -30,4 +30,8 @@ public class FeatureEnvStatus extends BaseEntity {
 
     @Column(nullable = false)
     private boolean enabled;
+
+    @Column(name = "rollout_percentage", nullable = false)
+    @Builder.Default
+    private int rolloutPercentage = 0;
 }

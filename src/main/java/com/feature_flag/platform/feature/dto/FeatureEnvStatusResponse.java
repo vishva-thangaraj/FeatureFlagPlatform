@@ -5,6 +5,7 @@ public record FeatureEnvStatusResponse(
         String featureId,
         String envId,
         String envName,
-        boolean enabled
+        boolean enabled,
+        int rolloutPercentage
 ) {
 }

@@ -1,0 +1,24 @@
+services:
+  app:
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/featureflag
+    depends_on:
+      mailpit:
+        condition: service_started
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: roottoor
+      MYSQL_DATABASE: featureflag
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      interval: 10s
+      retries: 5
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:

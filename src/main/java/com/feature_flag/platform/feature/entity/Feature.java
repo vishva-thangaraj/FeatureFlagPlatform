@@ -13,15 +13,15 @@ import lombok.*;
 @Builder
 @Table(
         name = "feature",
-        uniqueConstraints = @UniqueConstraint(name = "uk_feature_key_tenant", columnNames = {"key", "tenant_id"}),
+        uniqueConstraints = @UniqueConstraint(name = "uk_feature_key_tenant", columnNames = {"`key`", "tenant_id"}),
         indexes = {
-                @Index(name = "idx_feature_key", columnList = "key"),
+                @Index(name = "idx_feature_key", columnList = "`key`"),
                 @Index(name = "idx_feature_tenant_id", columnList = "tenant_id")
         }
 )
 public class Feature extends BaseEntity {
 
-    @Column(name = "key",nullable = false, length = 50)
+    @Column(name = "`key`", nullable = false, length = 50)
     private String key;
 
     @Column
