@@ -8,12 +8,19 @@ import com.feature_flag.platform.feature.dto.*;
 import com.feature_flag.platform.feature.entity.Env;
 import com.feature_flag.platform.feature.entity.Feature;
 import com.feature_flag.platform.feature.entity.FeatureEnvStatus;
+import com.feature_flag.platform.feature.entity.FeatureRule;
+import com.feature_flag.platform.feature.entity.FeatureUserOverride;
+import com.feature_flag.platform.feature.enums.RuleOperator;
 import com.feature_flag.platform.feature.mapper.FeatureMapper;
 import com.feature_flag.platform.feature.repository.EnvRepository;
 import com.feature_flag.platform.feature.repository.FeatureEnvStatusRepository;
 import com.feature_flag.platform.feature.repository.FeatureRepository;
+import com.feature_flag.platform.feature.repository.FeatureRuleRepository;
+import com.feature_flag.platform.feature.repository.FeatureUserOverrideRepository;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,12 +33,24 @@ public class FeatureService {
     private final TenantRepository tenantRepository;
     private final EnvRepository envRepository;
     private final FeatureEnvStatusRepository featureEnvStatusRepository;
+    private final FeatureRuleRepository featureRuleRepository;
+    private final FeatureUserOverrideRepository featureUserOverrideRepository;
+    private final ObjectMapper objectMapper;
 
-    public FeatureService(FeatureRepository featureRepository, TenantRepository tenantRepository, EnvRepository envRepository, FeatureEnvStatusRepository featureEnvStatusRepository) {
+    public FeatureService(FeatureRepository featureRepository,
+                          TenantRepository tenantRepository,
+                          EnvRepository envRepository,
+                          FeatureEnvStatusRepository featureEnvStatusRepository,
+                          FeatureRuleRepository featureRuleRepository,
+                          FeatureUserOverrideRepository featureUserOverrideRepository,
+                          ObjectMapper objectMapper) {
         this.featureRepository = featureRepository;
         this.tenantRepository = tenantRepository;
         this.envRepository = envRepository;
         this.featureEnvStatusRepository = featureEnvStatusRepository;
+        this.featureRuleRepository = featureRuleRepository;
+        this.featureUserOverrideRepository = featureUserOverrideRepository;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -101,6 +120,120 @@ public class FeatureService {
                         .env(env)
                         .build());
         featureEnvStatus.setEnabled(request.enabled());
+        if (request.rolloutPercentage() != null) {
+            featureEnvStatus.setRolloutPercentage(request.rolloutPercentage());
+        }
         featureEnvStatusRepository.save(featureEnvStatus);
+    }
+
+    // ---------- Feature rules ----------
+
+    @Transactional
+    public FeatureRule addRule(Long featureId, Long envId, String attribute,
+                               RuleOperator operator, Object value, int priority, Long tenantId) {
+        FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
+        FeatureRule rule = FeatureRule.builder()
+                .featureEnvStatus(fes)
+                .attribute(attribute)
+                .operator(operator)
+                .valueJson(encodeValue(value))
+                .priority(priority)
+                .build();
+        return featureRuleRepository.save(rule);
+    }
+
+    @Transactional
+    public FeatureRule updateRule(Long featureId, Long ruleId, String attribute,
+                                  RuleOperator operator, Object value, int priority, Long tenantId) {
+        FeatureRule rule = findRuleForTenant(featureId, ruleId, tenantId);
+        rule.setAttribute(attribute);
+        rule.setOperator(operator);
+        rule.setValueJson(encodeValue(value));
+        rule.setPriority(priority);
+        return featureRuleRepository.save(rule);
+    }
+
+    @Transactional
+    public void deleteRule(Long featureId, Long ruleId, Long tenantId) {
+        FeatureRule rule = findRuleForTenant(featureId, ruleId, tenantId);
+        featureRuleRepository.delete(rule);
+    }
+
+    public List<RuleResponse> listRules(Long featureId, Long envId, Long tenantId) {
+        FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
+        return featureRuleRepository.findAllByFeatureEnvStatusIdOrderByPriorityAsc(fes.getId())
+                .stream()
+                .map(this::toRuleResponse)
+                .toList();
+    }
+
+    // ---------- Flag evaluation ----------
+
+    public FlagEvaluationResponse evaluateFlag(Long featureId, Long envId, Long tenantId) {
+        Feature feature = findByIdAndTenant(featureId, tenantId);
+        FeatureEnvStatus fes = featureEnvStatusRepository.findByFeatureIdAndEnvId(featureId, envId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_FEATURE_ENV_STATUS_NOT_FOUND)));
+
+        List<String> targetUsers = featureUserOverrideRepository.findAllByFeatureEnvStatusId(fes.getId())
+                .stream()
+                .filter(FeatureUserOverride::isEnabled)
+                .map(FeatureUserOverride::getExternalUserId)
+                .toList();
+
+        List<RuleResponse> rules = featureRuleRepository
+                .findAllByFeatureEnvStatusIdOrderByPriorityAsc(fes.getId())
+                .stream()
+                .map(this::toRuleResponse)
+                .toList();
+
+        return new FlagEvaluationResponse(
+                feature.getKey(),
+                fes.getEnv().getName(),
+                fes.isEnabled(),
+                fes.getRolloutPercentage(),
+                targetUsers,
+                rules
+        );
+    }
+
+    // ---------- Helpers ----------
+
+    private FeatureEnvStatus findFeatureEnvStatus(Long featureId, Long envId, Long tenantId) {
+        findByIdAndTenant(featureId, tenantId);
+        return featureEnvStatusRepository.findByFeatureIdAndEnvId(featureId, envId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_FEATURE_ENV_STATUS_NOT_FOUND)));
+    }
+
+    private FeatureRule findRuleForTenant(Long featureId, Long ruleId, Long tenantId) {
+        findByIdAndTenant(featureId, tenantId);
+        FeatureRule rule = featureRuleRepository.findById(ruleId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_FEATURE_RULE_NOT_FOUND)));
+        if (!rule.getFeatureEnvStatus().getFeature().getId().equals(featureId)) {
+            throw new ResourceNotFoundException(I18N.getMessage(Messages.RESOURCE_FEATURE_RULE_NOT_FOUND));
+        }
+        return rule;
+    }
+
+    private String encodeValue(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException(I18N.getMessage(Messages.FEATURE_RULE_VALUE_INVALID), e);
+        }
+    }
+
+    private Object decodeValue(String json) {
+        try {
+            return objectMapper.readValue(json, Object.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(I18N.getMessage(Messages.FEATURE_RULE_VALUE_INVALID), e);
+        }
+    }
+
+    private RuleResponse toRuleResponse(FeatureRule rule) {
+        return new RuleResponse(rule.getAttribute(), rule.getOperator(), decodeValue(rule.getValueJson()));
     }
 }
