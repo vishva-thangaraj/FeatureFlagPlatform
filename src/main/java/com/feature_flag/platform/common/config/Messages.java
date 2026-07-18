@@ -47,4 +47,9 @@ public final class Messages {
     //ENV
     public static final String ENV_NAME_ALREADY_EXISTS = "env.name.already.exists";
     public static final String RESOURCE_ENV_NOT_FOUND = "resource.env.not.found";
+
+    // Feature rule
+    public static final String RESOURCE_FEATURE_RULE_NOT_FOUND = "resource.feature.rule.not.found";
+    public static final String RESOURCE_FEATURE_ENV_STATUS_NOT_FOUND = "resource.feature.env.status.not.found";
+    public static final String FEATURE_RULE_VALUE_INVALID = "feature.rule.value.invalid";
 }

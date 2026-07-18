@@ -15,7 +15,8 @@ public class FeatureEnvStatusMapper {
                 status.getFeature().getId().toString(),
                 status.getEnv().getId().toString(),
                 status.getEnv().getName(),
-                status.isEnabled()
+                status.isEnabled(),
+                status.getRolloutPercentage()
         );
     }
 
