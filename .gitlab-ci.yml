@@ -1,5 +1,7 @@
 stages:
     - test
+    - build
+    - push
 
 test:
     stage: test
@@ -7,6 +9,30 @@ test:
     script:
         - ./gradlew test
     rules:
-        - if: '$CI_PIPELINE_SOURCE == "push"'           # feature branch push
-        - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'  # merge request
+        - if: '$CI_PIPELINE_SOURCE == "push"'
+        - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+        - if: '$CI_COMMIT_BRANCH == "main"'
+
+build:
+    stage: build
+    image: docker:24
+    services:
+        - docker:24-dind
+    script:
+        - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+        - docker build -t .
+    rules:
+        - if: '$CI_PIPELINE_SOURCE == "push"'
+        - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+push:
+    stage: push
+    image: docker:24
+    services:
+        - docker:24-dind
+    script:
+        - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+        - docker build -t $CI_REGISTRY_NAME:latest .
+        - docker push $CI_REGISTRY_NAME:latest
+    rules:
         - if: '$CI_COMMIT_BRANCH == "main"'
