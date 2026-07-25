@@ -20,7 +20,7 @@ build:
         - docker:24-dind
     script:
         - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-        - docker build -t .
+        - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA .
     rules:
         - if: '$CI_PIPELINE_SOURCE == "push"'
         - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -32,7 +32,7 @@ push:
         - docker:24-dind
     script:
         - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-        - docker build -t $CI_REGISTRY_NAME:latest .
-        - docker push $CI_REGISTRY_NAME:latest
+        - docker build -t $CI_REGISTRY_IMAGE:latest .
+        - docker push $CI_REGISTRY_IMAGE:latest
     rules:
         - if: '$CI_COMMIT_BRANCH == "main"'
