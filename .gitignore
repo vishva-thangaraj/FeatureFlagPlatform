@@ -42,3 +42,6 @@ out/
 .env.local
 /Wallet_TD92XTJ4048ZUUGK
 /.claude/
+KAFKA_TEACHING_PLAN.md
+.mcp.json
+TARGETING_PLAN.md

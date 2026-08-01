@@ -52,4 +52,8 @@ public final class Messages {
     public static final String RESOURCE_FEATURE_RULE_NOT_FOUND = "resource.feature.rule.not.found";
     public static final String RESOURCE_FEATURE_ENV_STATUS_NOT_FOUND = "resource.feature.env.status.not.found";
     public static final String FEATURE_RULE_VALUE_INVALID = "feature.rule.value.invalid";
+    public static final String FEATURE_RULE_OPERATOR_VALUE_MISMATCH = "feature.rule.operator.value.mismatch";
+    public static final String FEATURE_RULE_DUPLICATE_ATTRIBUTE = "feature.rule.duplicate.attribute";
+    public static final String FEATURE_RULE_VALUE_TYPE_MISMATCH = "feature.rule.value.type.mismatch";
+    public static final String RESOURCE_FEATURE_OVERRIDE_NOT_FOUND = "resource.feature.override.not.found";
 }

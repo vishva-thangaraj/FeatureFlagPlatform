@@ -23,36 +23,45 @@ public class ENVController {
 
     @PostMapping
     public ResponseEntity<EnvResponse> createEnv(@Valid @RequestBody CreateEnvRequest request,
-                                                 @AuthenticationPrincipal TenantUserDetails userDetails) {
-        EnvResponse response = envService.createEnv(request, userDetails.getTenantId());
+                                                 @AuthenticationPrincipal TenantUserDetails userDetails,
+                                                 @RequestParam Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        EnvResponse response = envService.createEnv(request, tenantID);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @GetMapping
-    public ResponseEntity<EnvListResponse> getEnvs(@AuthenticationPrincipal TenantUserDetails userDetails) {
-        EnvListResponse response = envService.getEnvsList(userDetails.getTenantId());
+    public ResponseEntity<EnvListResponse> getEnvs(@AuthenticationPrincipal TenantUserDetails userDetails, @RequestParam Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        EnvListResponse response = envService.getEnvsList(tenantID);
         return ResponseEntity.ok(response);
     }
 
     @GetMapping("/{envId}")
     public ResponseEntity<EnvResponse> getEnv(@PathVariable Long envId,
-                                              @AuthenticationPrincipal TenantUserDetails userDetails) {
-        EnvResponse response = envService.getEnv(envId, userDetails.getTenantId());
+                                              @AuthenticationPrincipal TenantUserDetails userDetails,
+                                              @RequestParam Long tenantID) {
+        tenantID  = tenantID != null ? tenantID : userDetails.getTenantId();
+        EnvResponse response = envService.getEnv(envId, tenantID);
         return ResponseEntity.ok(response);
     }
 
     @PutMapping("/{envId}")
     public ResponseEntity<EnvResponse> updateEnv(@PathVariable Long envId,
                                                  @Valid @RequestBody UpdateEnvRequest request,
-                                                 @AuthenticationPrincipal TenantUserDetails userDetails) {
-        EnvResponse response = envService.updateEnv(envId, request, userDetails.getTenantId());
+                                                 @AuthenticationPrincipal TenantUserDetails userDetails,
+                                                 @RequestParam Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        EnvResponse response = envService.updateEnv(envId, request, tenantID);
         return ResponseEntity.ok(response);
     }
 
     @DeleteMapping("/{envId}")
     public ResponseEntity<Void> deleteEnv(@PathVariable Long envId,
-                                          @AuthenticationPrincipal TenantUserDetails userDetails) {
-        envService.deleteEnv(envId, userDetails.getTenantId());
+                                          @AuthenticationPrincipal TenantUserDetails userDetails,
+                                          @RequestParam Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        envService.deleteEnv(envId, tenantID);
         return ResponseEntity.noContent().build();
     }
 }

@@ -322,7 +322,103 @@
           "requestsPerMinute": 20,
           "burstSize": 5
         },
-        "allowedParams": ["envId","enable"]
+        "allowedParams": ["envId","enabled","rolloutPercentage"]
+    },
+    {
+      "path": "/api/v1/features/*/envs",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 60, "burstSize": 10 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/rules/attributes",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 60, "burstSize": 10 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/envs/*/rules",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 60, "burstSize": 10 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/envs/*/rules",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": { "requestsPerMinute": 20, "burstSize": 5 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/envs/*/rules",
+      "method": "PUT",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": { "requestsPerMinute": 20, "burstSize": 5 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/rules/*",
+      "method": "PUT",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": { "requestsPerMinute": 20, "burstSize": 5 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/rules/*",
+      "method": "DELETE",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": { "requestsPerMinute": 20, "burstSize": 5 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/envs/*/overrides",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 60, "burstSize": 10 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/envs/*/overrides",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": { "requestsPerMinute": 20, "burstSize": 5 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/features/*/envs/*/overrides/*",
+      "method": "DELETE",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": { "requestsPerMinute": 20, "burstSize": 5 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/config",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 120, "burstSize": 20 },
+      "allowedParams": ["envName"]
+    },
+    {
+      "path": "/api/v1/config/*",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 120, "burstSize": 20 },
+      "allowedParams": ["envName"]
     }
   ]
 }
