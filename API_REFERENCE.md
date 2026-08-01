@@ -335,6 +335,145 @@ Accept an invitation using the token from the email link.
 
 ---
 
+### Feature Targeting Rules (`/api/v1/features/{featureId}`)
+
+Multi-field, multi-value targeting for a flag in a given environment. A flag/env can carry many
+rules; **all enabled rules must match** (logical AND). Use `IN`/`NOT_IN` for "one field, many
+values" (e.g. `country IN ["IN","US"]`). Writes require `OWNER`/`ADMIN`.
+
+#### `GET /api/v1/features/{featureId}/envs` (Protected)
+
+List the per-environment status rows for a feature.
+
+#### `GET /api/v1/features/{featureId}/rules/attributes` (Protected)
+
+Distinct attribute names already used across the tenant's rules — for populating a UI datalist.
+Returns `["appVersion","country","plan"]`.
+
+#### `GET /api/v1/features/{featureId}/envs/{envId}/rules` (Protected)
+
+List rules for a feature/env, ordered by `priority` ascending.
+
+#### `POST /api/v1/features/{featureId}/envs/{envId}/rules` (OWNER/ADMIN)
+
+Add one rule. Validated against the existing set.
+
+**Request:**
+
+```json
+{
+  "attribute": "country",
+  "operator": "IN",
+  "valueType": "STRING",
+  "values": ["IN", "US"],
+  "caseSensitive": false,
+  "negated": false,
+  "enabled": true,
+  "priority": 0
+}
+```
+
+**Response:** `201 Created`
+
+```json
+{
+  "id": "731...",
+  "attribute": "country",
+  "operator": "IN",
+  "valueType": "STRING",
+  "values": ["IN", "US"],
+  "caseSensitive": false,
+  "negated": false,
+  "enabled": true,
+  "priority": 0
+}
+```
+
+#### `PUT /api/v1/features/{featureId}/envs/{envId}/rules` (OWNER/ADMIN)
+
+**Replace the entire rule set** for the feature/env in one atomic call. Body is
+`{ "rules": [ <RuleRequest>, ... ] }`; an empty list clears all rules. This is the call a targeting
+editor should use on save.
+
+#### `PUT /api/v1/features/{featureId}/rules/{ruleId}` (OWNER/ADMIN)
+
+Update a single rule. Same body as `POST`.
+
+#### `DELETE /api/v1/features/{featureId}/rules/{ruleId}` (OWNER/ADMIN)
+
+Delete a single rule. `204 No Content`.
+
+**Rule fields:**
+
+| Field           | Type            | Notes                                                                                  |
+|-----------------|-----------------|----------------------------------------------------------------------------------------|
+| `attribute`     | String          | Free-form; `^[a-zA-Z][a-zA-Z0-9_.]{0,99}$`. e.g. `country`, `region`, `plan`, `appVersion` |
+| `operator`      | RuleOperator    | See enum below                                                                         |
+| `valueType`     | RuleValueType   | `STRING` / `NUMBER` / `BOOLEAN` / `SEMVER` — required for consistent client comparison |
+| `values`        | Array           | Always an array. Single-value operators take exactly one element; `IN`/`NOT_IN` take ≥1 |
+| `caseSensitive` | Boolean         | Default `false` (so `"in"` matches `"IN"`)                                              |
+| `negated`       | Boolean         | Inverts the match                                                                      |
+| `enabled`       | Boolean         | Disabled rules are stored but omitted from the client config payload                   |
+| `priority`      | Integer         | Ordering for display; does not affect the AND outcome                                  |
+
+**Validation errors:** `400` for operator/arity/type mismatches; `409` if two enabled single-valued
+rules share the same `(attribute, operator)` — which under AND semantics would make the flag
+permanently unmatchable (use `IN` instead).
+
+---
+
+### Feature User Overrides (`/api/v1/features/{featureId}/envs/{envId}/overrides`)
+
+Per-user allow/deny list keyed by the customer's own external user id. Writes require `OWNER`/`ADMIN`.
+
+- `GET` — list overrides.
+- `POST` — upsert. Body: `{ "externalUserId": "u-123", "enabled": true }` (`enabled:false` = deny).
+  `externalUserId` is in the body, not the path, since it is often an email.
+- `DELETE /{externalUserId}` — remove an override. `204 No Content`.
+
+---
+
+### Client Config (`/api/v1/config`) — SDK-facing
+
+Returns the flag/targeting **array** for an environment. **The platform does not evaluate flags** —
+the SDK computes on/off from this payload. Supports `ETag`/`If-None-Match` → `304 Not Modified`.
+
+> These currently sit behind the dashboard user JWT. **API-key authentication is required before a
+> real SDK can use them** (see TARGETING_PLAN.md). Usable today only for the dashboard's own preview.
+
+#### `GET /api/v1/config?envName=prod` (Protected)
+
+All flags for the tenant in that environment.
+
+#### `GET /api/v1/config/{featureKey}?envName=prod` (Protected)
+
+One flag. `404` if the feature is not configured for that environment.
+
+**Response (single):**
+
+```json
+{
+  "featureKey": "checkout_v2",
+  "environment": "prod",
+  "enabled": true,
+  "rolloutPercentage": 25,
+  "enabledUsers": ["u-1"],
+  "disabledUsers": ["u-9"],
+  "rules": [
+    { "id": "731...", "attribute": "country", "operator": "IN", "valueType": "STRING",
+      "values": ["IN", "US"], "caseSensitive": false, "negated": false, "enabled": true, "priority": 0 }
+  ],
+  "lastModified": "2026-07-30T10:00:00Z"
+}
+```
+
+**SDK evaluation contract:** the normative precedence order (kill switch → deny list → allow list →
+rules → percentage), rule matching, and the MurmurHash3 bucketing algorithm every SDK must implement
+identically are specified in **TARGETING_PLAN.md, Phase 4**. Follow it exactly — the server never
+returns a decision, only this config.
+
+---
+
 ## Enums
 
 | Enum             | Values                                          |
@@ -344,6 +483,8 @@ Accept an invitation using the token from the email link.
 | MembershipStatus | `ACTIVE`, `INVITED`, `REMOVED`                  |
 | RoleName         | `OWNER`, `ADMIN`, `MEMBER`, `VIEWER`, `SUPER_ADMIN` |
 | InvitationStatus | `PENDING`, `ACCEPTED`, `VALIDATED`, `EXPIRED`, `CANCELLED` |
+| RuleOperator     | `EQUALS`, `NOT_EQUALS`, `IN`, `NOT_IN`, `GT`, `GTE`, `LT`, `LTE`, `CONTAINS`, `STARTS_WITH`, `ENDS_WITH`, `SEMVER_GT`, `SEMVER_GTE`, `SEMVER_LT`, `SEMVER_LTE` |
+| RuleValueType    | `STRING`, `NUMBER`, `BOOLEAN`, `SEMVER`         |
 
 ---
 
