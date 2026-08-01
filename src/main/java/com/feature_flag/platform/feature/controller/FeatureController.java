@@ -20,43 +20,55 @@ public class FeatureController {
 
     @PostMapping
     public ResponseEntity<FeatureResponse> createFeature(@Valid @RequestBody CreateFeatureRequest request,
-                                                         @AuthenticationPrincipal TenantUserDetails userDetails) {
-        FeatureResponse response = featureService.createFeature(request, userDetails.getTenantId());
+                                                         @AuthenticationPrincipal TenantUserDetails userDetails,
+                                                         @RequestParam(required = false) Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        FeatureResponse response = featureService.createFeature(request, tenantID);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @GetMapping
-    public ResponseEntity<FeatureListResponse> getFeatures(@AuthenticationPrincipal TenantUserDetails userDetails) {
-        FeatureListResponse response = featureService.getFeaturesList(userDetails.getTenantId());
+    public ResponseEntity<FeatureListResponse> getFeatures(@AuthenticationPrincipal TenantUserDetails userDetails,
+                                                           @RequestParam(required = false) Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        FeatureListResponse response = featureService.getFeaturesList(tenantID);
         return ResponseEntity.ok(response);
     }
 
     @GetMapping("/{featureId}")
     public ResponseEntity<FeatureResponse> getFeature(@PathVariable Long featureId,
-                                                      @AuthenticationPrincipal TenantUserDetails userDetails) {
-        FeatureResponse response = featureService.getFeature(featureId, userDetails.getTenantId());
+                                                      @AuthenticationPrincipal TenantUserDetails userDetails,
+                                                      @RequestParam(required = false) Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        FeatureResponse response = featureService.getFeature(featureId, tenantID);
         return ResponseEntity.ok(response);
     }
 
     @PutMapping("/{featureId}")
     public ResponseEntity<FeatureResponse> updateFeature(@PathVariable Long featureId,
                                                          @Valid @RequestBody UpdateFeatureRequest request,
-                                                         @AuthenticationPrincipal TenantUserDetails userDetails) {
-        FeatureResponse response = featureService.updateFeature(featureId, request, userDetails.getTenantId());
+                                                         @AuthenticationPrincipal TenantUserDetails userDetails,
+                                                         @RequestParam(required = false) Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        FeatureResponse response = featureService.updateFeature(featureId, request, tenantID);
         return ResponseEntity.ok(response);
     }
 
     @DeleteMapping("/{featureId}")
     public ResponseEntity<Void> deleteFeature(@PathVariable Long featureId,
-                                              @AuthenticationPrincipal TenantUserDetails userDetails) {
-        featureService.deleteFeature(featureId, userDetails.getTenantId());
+                                              @AuthenticationPrincipal TenantUserDetails userDetails,
+                                              @RequestParam(required = false) Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        featureService.deleteFeature(featureId, tenantID);
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{featureId}/enable")
     public ResponseEntity<Void> enableFeature(@PathVariable Long featureId,@Valid @RequestBody FeatureEnableRequest request,
-                                              @AuthenticationPrincipal TenantUserDetails userDetails) {
-        featureService.setFeatureStatus(featureId, request, userDetails.getTenantId());
+                                              @AuthenticationPrincipal TenantUserDetails userDetails,
+                                              @RequestParam(required = false) Long tenantID) {
+        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
+        featureService.setFeatureStatus(featureId, request, tenantID);
         return ResponseEntity.ok().build();
     }
 }
