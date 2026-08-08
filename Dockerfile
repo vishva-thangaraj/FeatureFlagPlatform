@@ -5,7 +5,7 @@ WORKDIR /app
 COPY gradle/ gradle/
 COPY gradlew build.gradle.kts settings.gradle.kts ./
 COPY src/ src/
-RUN ./gradlew bootJar --no-daemon -x test
+RUN ./gradlew bootJar --no-daemon -x test --max-workers=1 -Dorg.gradle.jvmargs="-Xmx256m -XX:MaxMetaspaceSize=256m -Dfile.encoding=UTF-8"
 
 # Stage 2: Run
 FROM eclipse-temurin:17-jre
