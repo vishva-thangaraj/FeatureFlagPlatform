@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "FeatureChangeEvent",
+  "namespace": "com.feature_flag.platform.events",
+  "fields": [
+    { "name": "eventId", "type": "string" },
+    { "name": "changeType", "type": { "type": "enum", "name": "ChangeType",
+      "symbols": ["STATUS_CHANGED","RULE_ADDED","RULE_UPDATED","RULE_DELETED",
+        "RULES_REPLACED","OVERRIDE_SET","OVERRIDE_DELETED"] }},
+    { "name": "tenantId",      "type": "string" },
+    { "name": "featureKey",    "type": "string" },
+    { "name": "envName",       "type": "string" },
+    { "name": "occurredAt", "type": {"type":"long","logicalType":"timestamp-millis"} },
+    { "name": "actorUserId", "type": ["null", "string"], "default": null },
+    { "name": "details", "type": { "type": "map", "values": "string" },
+      "default": {}
+    }
+  ]
+
+}
