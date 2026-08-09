@@ -1,7 +1,7 @@
 {
   "type": "record",
   "name": "FeatureChangeEvent",
-  "namespace": "com.feature_flag.platform.events",
+  "namespace": "com.feature_flag.platform.feature.events",
   "fields": [
     { "name": "eventId", "type": "string" },
     { "name": "changeType", "type": { "type": "enum", "name": "ChangeType",
