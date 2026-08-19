@@ -4,6 +4,7 @@ import com.feature_flag.platform.common.security.JwtAuthenticationFilter;
 import com.feature_flag.platform.common.security.filter.ParamValidationFilter;
 import com.feature_flag.platform.common.security.filter.RateLimitFilter;
 import com.feature_flag.platform.common.security.filter.RoleAuthorizationFilter;
+import com.feature_flag.platform.common.security.filter.TenantContextFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
@@ -21,15 +22,18 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final RateLimitFilter rateLimitFilter;
+    private final TenantContextFilter tenantContextFilter;
     private final RoleAuthorizationFilter roleAuthorizationFilter;
     private final ParamValidationFilter paramValidationFilter;
 
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
                           RateLimitFilter rateLimitFilter,
+                          TenantContextFilter tenantContextFilter,
                           RoleAuthorizationFilter roleAuthorizationFilter,
                           ParamValidationFilter paramValidationFilter) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.rateLimitFilter = rateLimitFilter;
+        this.tenantContextFilter = tenantContextFilter;
         this.roleAuthorizationFilter = roleAuthorizationFilter;
         this.paramValidationFilter = paramValidationFilter;
     }
@@ -55,7 +59,10 @@ public class SecurityConfig {
                 )
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(roleAuthorizationFilter, JwtAuthenticationFilter.class)
+                // Tenant scope must be resolved before roles are checked, so RoleAuthorizationFilter
+                // evaluates the target tenant's roles rather than the token's default tenant.
+                .addFilterAfter(tenantContextFilter, JwtAuthenticationFilter.class)
+                .addFilterAfter(roleAuthorizationFilter, TenantContextFilter.class)
                 .addFilterAfter(paramValidationFilter, RoleAuthorizationFilter.class);
 
         return httpSecurity.build();

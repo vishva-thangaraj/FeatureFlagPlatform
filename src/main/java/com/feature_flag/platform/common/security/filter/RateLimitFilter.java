@@ -9,7 +9,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -25,10 +24,12 @@ import java.util.concurrent.atomic.AtomicLong;
 public class RateLimitFilter extends OncePerRequestFilter {
 
     private final ApiSecurityConfigLoader configLoader;
+    private final FilterErrorWriter errorWriter;
     private final Map<String, TokenBucket> buckets = new ConcurrentHashMap<>();
 
-    public RateLimitFilter(ApiSecurityConfigLoader configLoader) {
+    public RateLimitFilter(ApiSecurityConfigLoader configLoader, FilterErrorWriter errorWriter) {
         this.configLoader = configLoader;
+        this.errorWriter = errorWriter;
     }
 
     @Override
@@ -49,10 +50,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 k -> new TokenBucket(throttle.getRequestsPerMinute(), throttle.getBurstSize()));
 
         if (!bucket.tryConsume()) {
-            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            response.getWriter().write(
-                    "{\"status\":429,\"error\":\"Too Many Requests\",\"message\":\"Rate limit exceeded. Try again later.\"}");
+            errorWriter.write(response, HttpStatus.TOO_MANY_REQUESTS, "Rate limit exceeded. Try again later.");
             return;
         }
 

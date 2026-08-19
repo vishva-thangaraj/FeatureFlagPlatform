@@ -7,7 +7,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -20,9 +19,11 @@ import java.util.Set;
 public class ParamValidationFilter extends OncePerRequestFilter {
 
     private final ApiSecurityConfigLoader configLoader;
+    private final FilterErrorWriter errorWriter;
 
-    public ParamValidationFilter(ApiSecurityConfigLoader configLoader) {
+    public ParamValidationFilter(ApiSecurityConfigLoader configLoader, FilterErrorWriter errorWriter) {
         this.configLoader = configLoader;
+        this.errorWriter = errorWriter;
     }
 
     @Override
@@ -53,10 +54,7 @@ public class ParamValidationFilter extends OncePerRequestFilter {
 
             for (String param : queryParams) {
                 if (!allowedSet.contains(param)) {
-                    response.setStatus(HttpStatus.BAD_REQUEST.value());
-                    response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                    response.getWriter().write(
-                            "{\"status\":400,\"error\":\"Bad Request\",\"message\":\"Disallowed parameter: " + param + "\"}");
+                    errorWriter.write(response, HttpStatus.BAD_REQUEST, "Disallowed parameter: " + param);
                     return;
                 }
             }
