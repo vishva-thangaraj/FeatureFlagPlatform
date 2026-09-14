@@ -25,8 +25,45 @@ Authorization: Bearer <accessToken>
 |------------|--------------|------------------------------------|
 | `sub`      | String       | User ID                            |
 | `email`    | String       | User email                         |
-| `tenantId` | Long / null  | Current tenant context (nullable)  |
-| `roles`    | List<String> | Role names in current tenant       |
+| `tenantId` | Long / null  | The caller's **default** tenant (nullable) |
+| `roles`    | List<String> | Role names in the default tenant   |
+
+The `roles` claim is informational only. Authorization always re-reads the caller's roles from their
+membership in the tenant the request actually targets, so a role change or removed membership takes effect
+on the caller's next request rather than when their token expires.
+
+### Tenant context (`X-Tenant-Id`)
+
+Every tenant-scoped endpoint acts on exactly one tenant. Which one is decided per request:
+
+```
+X-Tenant-Id: 461168601842738689
+```
+
+- **Header present** — the request acts on that tenant. This is how a user who belongs to several tenants
+  reaches any of them without swapping tokens.
+- **Header absent** — the request falls back to the `tenantId` claim in the token (the caller's default
+  tenant, set at login and changed with `switch-tenant`).
+
+The tenant is authorized on every request: the caller must hold an **ACTIVE** membership in it. Roles for
+the role checks below come from that membership.
+
+| Condition                                              | Response |
+|--------------------------------------------------------|----------|
+| Header is not a number                                 | `400`    |
+| Caller has no membership in the tenant                 | `403`    |
+| Caller's membership is not ACTIVE                      | `403`    |
+| No header and no `tenantId` claim, on a scoped endpoint | `403`    |
+
+**Not tenant-scoped**, so the header is ignored: `POST /api/v1/auth/switch-tenant`,
+`GET`/`POST /api/v1/tenants`, and `/api/v1/tenants/{tenantId}` (which takes its tenant from the path).
+
+> A `tenantID` **query parameter** was previously accepted on the feature, env and config endpoints. It was
+> never authorized against the caller's memberships and has been removed. Supplying it now has no effect —
+> use the header.
+
+Responses from `/api/v1/config` vary by tenant, so they carry `Vary: X-Tenant-Id` and their `ETag` is
+tenant-scoped.
 
 ---
 

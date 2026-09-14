@@ -8,7 +8,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -22,9 +21,11 @@ import java.util.Optional;
 public class RoleAuthorizationFilter extends OncePerRequestFilter {
 
     private final ApiSecurityConfigLoader configLoader;
+    private final FilterErrorWriter errorWriter;
 
-    public RoleAuthorizationFilter(ApiSecurityConfigLoader configLoader) {
+    public RoleAuthorizationFilter(ApiSecurityConfigLoader configLoader, FilterErrorWriter errorWriter) {
         this.configLoader = configLoader;
+        this.errorWriter = errorWriter;
     }
 
     @Override
@@ -51,10 +52,7 @@ public class RoleAuthorizationFilter extends OncePerRequestFilter {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !(auth.getPrincipal() instanceof TenantUserDetails userDetails)) {
             if (rule.isAuthRequired()) {
-                response.setStatus(HttpStatus.FORBIDDEN.value());
-                response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                response.getWriter().write(
-                        "{\"status\":403,\"error\":\"Forbidden\",\"message\":\"Insufficient permissions.\"}");
+                errorWriter.write(response, HttpStatus.FORBIDDEN, "Insufficient permissions.");
                 return;
             }
             filterChain.doFilter(request, response);
@@ -65,10 +63,8 @@ public class RoleAuthorizationFilter extends OncePerRequestFilter {
                 .anyMatch(requiredRoles::contains);
 
         if (!hasRole) {
-            response.setStatus(HttpStatus.FORBIDDEN.value());
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            response.getWriter().write(
-                    "{\"status\":403,\"error\":\"Forbidden\",\"message\":\"You do not have the required role to access this resource.\"}");
+            errorWriter.write(response, HttpStatus.FORBIDDEN,
+                    "You do not have the required role to access this resource.");
             return;
         }
 

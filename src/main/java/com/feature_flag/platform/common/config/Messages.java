@@ -23,6 +23,7 @@ public final class Messages {
     public static final String TENANT_MEMBERSHIP_NOT_ACTIVE = "tenant.membership.not.active";
     public static final String TENANT_MEMBERSHIP_NO_LONGER_EXISTS = "tenant.membership.no.longer.exists";
     public static final String TENANT_MEMBERSHIP_NO_LONGER_ACTIVE = "tenant.membership.no.longer.active";
+    public static final String TENANT_HEADER_INVALID = "tenant.header.invalid";
     public static final String RESOURCE_TENANT_NOT_FOUND = "resource.tenant.not.found";
 
     // User Invitation
