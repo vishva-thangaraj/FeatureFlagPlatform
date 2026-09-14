@@ -14,8 +14,8 @@ import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.EmailAlreadyExistsException;
 import com.feature_flag.platform.common.exception.InvalidCredentialsException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
-import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
 import com.feature_flag.platform.common.exception.UserSuspendedException;
+import com.feature_flag.platform.common.security.TenantMembershipResolver;
 import com.feature_flag.platform.tenant.entity.UserInvitation;
 import com.feature_flag.platform.tenant.enums.InvitationStatus;
 import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
@@ -39,19 +39,22 @@ public class AuthServiceImpl implements AuthService {
     private final UserInvitationRepository userInvitationRepository;
     private final TokenService tokenService;
     private final PasswordEncoder passwordEncoder;
+    private final TenantMembershipResolver tenantMembershipResolver;
 
     public AuthServiceImpl(UserRepository userRepository,
                            MembershipRepository membershipRepository,
                            RoleRepository roleRepository,
                            UserInvitationRepository userInvitationRepository,
                            TokenService tokenService,
-                           PasswordEncoder passwordEncoder) {
+                           PasswordEncoder passwordEncoder,
+                           TenantMembershipResolver tenantMembershipResolver) {
         this.userRepository = userRepository;
         this.membershipRepository = membershipRepository;
         this.roleRepository = roleRepository;
         this.userInvitationRepository = userInvitationRepository;
         this.tokenService = tokenService;
         this.passwordEncoder = passwordEncoder;
+        this.tenantMembershipResolver = tenantMembershipResolver;
     }
 
     @Override
@@ -108,30 +111,24 @@ public class AuthServiceImpl implements AuthService {
                     I18N.getMessage(Messages.AUTH_USER_SUSPENDED));
         }
 
-        List<Membership> activeMemberships = membershipRepository.findByUserId(user.getId()).stream()
-                .filter(m -> m.getStatus() == MembershipStatus.ACTIVE)
-                .toList();
-
-        if (activeMemberships.isEmpty()) {
-            return tokenService.createTokenPair(user, null, Collections.emptyList());
-        }
-
         Membership membership;
         if (request.tenantId() != null) {
-            membership = activeMemberships.stream()
-                    .filter(m -> m.getTenant().getId().equals(request.tenantId()))
-                    .findFirst()
-                    .orElseThrow(() -> new TenantAccessDeniedException(
-                            I18N.getMessage(Messages.TENANT_NO_ACTIVE_MEMBERSHIP)));
+            // Asking for a tenant you have no active membership in is denied rather than silently
+            // downgraded to a tenant-less token.
+            membership = tenantMembershipResolver.requireActiveMembership(user.getId(), request.tenantId());
         } else {
+            List<Membership> activeMemberships = membershipRepository.findByUserId(user.getId()).stream()
+                    .filter(m -> m.getStatus() == MembershipStatus.ACTIVE)
+                    .toList();
+
+            if (activeMemberships.isEmpty()) {
+                return tokenService.createTokenPair(user, null, Collections.emptyList());
+            }
             membership = activeMemberships.get(0);
         }
 
-        List<String> roles = membership.getRoles().stream()
-                .map(Role::getName)
-                .toList();
-
-        return tokenService.createTokenPair(user, membership.getTenant(), roles);
+        return tokenService.createTokenPair(user, membership.getTenant(),
+                tenantMembershipResolver.roleNames(membership));
     }
 
     @Override
@@ -141,19 +138,9 @@ public class AuthServiceImpl implements AuthService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         I18N.getMessage(Messages.RESOURCE_USER_NOT_FOUND)));
 
-        Membership membership = membershipRepository.findByUserIdAndTenantId(userId, request.tenantId())
-                .orElseThrow(() -> new TenantAccessDeniedException(
-                        I18N.getMessage(Messages.TENANT_NO_MEMBERSHIP)));
+        Membership membership = tenantMembershipResolver.requireActiveMembership(userId, request.tenantId());
 
-        if (membership.getStatus() != MembershipStatus.ACTIVE) {
-            throw new TenantAccessDeniedException(
-                    I18N.getMessage(Messages.TENANT_MEMBERSHIP_NOT_ACTIVE));
-        }
-
-        List<String> roles = membership.getRoles().stream()
-                .map(Role::getName)
-                .toList();
-
-        return tokenService.createTokenPair(user, membership.getTenant(), roles);
+        return tokenService.createTokenPair(user, membership.getTenant(),
+                tenantMembershipResolver.roleNames(membership));
     }
 }

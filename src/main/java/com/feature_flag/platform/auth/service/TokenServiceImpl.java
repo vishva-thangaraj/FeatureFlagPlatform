@@ -9,14 +9,12 @@ import com.feature_flag.platform.auth.repository.RefreshTokenRepository;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.InvalidTokenException;
-import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
 import com.feature_flag.platform.common.security.JwtProperties;
 import com.feature_flag.platform.common.security.JwtTokenProvider;
+import com.feature_flag.platform.common.security.TenantMembershipResolver;
 import com.feature_flag.platform.common.security.TokenHashUtil;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
-import com.feature_flag.platform.tenant.enums.MembershipStatus;
-import com.feature_flag.platform.tenant.repository.MembershipRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,18 +26,18 @@ import java.util.List;
 public class TokenServiceImpl implements TokenService {
 
     private final RefreshTokenRepository refreshTokenRepository;
-    private final MembershipRepository membershipRepository;
+    private final TenantMembershipResolver tenantMembershipResolver;
     private final JwtTokenProvider jwtTokenProvider;
     private final JwtProperties jwtProperties;
     private final AuthMapper authMapper;
 
     public TokenServiceImpl(RefreshTokenRepository refreshTokenRepository,
-                            MembershipRepository membershipRepository,
+                            TenantMembershipResolver tenantMembershipResolver,
                             JwtTokenProvider jwtTokenProvider,
                             JwtProperties jwtProperties,
                             AuthMapper authMapper) {
         this.refreshTokenRepository = refreshTokenRepository;
-        this.membershipRepository = membershipRepository;
+        this.tenantMembershipResolver = tenantMembershipResolver;
         this.jwtTokenProvider = jwtTokenProvider;
         this.jwtProperties = jwtProperties;
         this.authMapper = authMapper;
@@ -72,18 +70,10 @@ public class TokenServiceImpl implements TokenService {
 
         List<String> roles;
         if (tenant != null) {
-            Membership membership = membershipRepository.findByUserIdAndTenantId(user.getId(), tenant.getId())
-                    .orElseThrow(() -> new TenantAccessDeniedException(
-                            I18N.getMessage(Messages.TENANT_MEMBERSHIP_NO_LONGER_EXISTS)));
-
-            if (membership.getStatus() != MembershipStatus.ACTIVE) {
-                throw new TenantAccessDeniedException(
-                        I18N.getMessage(Messages.TENANT_MEMBERSHIP_NO_LONGER_ACTIVE));
-            }
-
-            roles = membership.getRoles().stream()
-                    .map(com.feature_flag.platform.auth.entity.Role::getName)
-                    .toList();
+            Membership membership = tenantMembershipResolver.requireActiveMembership(
+                    user.getId(), tenant.getId(),
+                    Messages.TENANT_MEMBERSHIP_NO_LONGER_EXISTS, Messages.TENANT_MEMBERSHIP_NO_LONGER_ACTIVE);
+            roles = tenantMembershipResolver.roleNames(membership);
         } else {
             roles = Collections.emptyList();
         }

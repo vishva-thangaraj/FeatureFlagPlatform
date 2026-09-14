@@ -13,11 +13,11 @@ import com.feature_flag.platform.common.exception.InvalidTokenException;
 import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
 import com.feature_flag.platform.common.security.JwtProperties;
 import com.feature_flag.platform.common.security.JwtTokenProvider;
+import com.feature_flag.platform.common.security.TenantMembershipResolver;
 import com.feature_flag.platform.common.security.TokenHashUtil;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
-import com.feature_flag.platform.tenant.repository.MembershipRepository;
 import com.feature_flag.platform.util.TestEntityUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,7 +45,7 @@ import static org.mockito.Mockito.*;
 class TokenServiceTest {
 
     @Mock private RefreshTokenRepository refreshTokenRepository;
-    @Mock private MembershipRepository membershipRepository;
+    @Mock private TenantMembershipResolver tenantMembershipResolver;
     @Mock private JwtTokenProvider jwtTokenProvider;
     @Mock private JwtProperties jwtProperties;
     @Mock private AuthMapper authMapper;
@@ -103,7 +103,9 @@ class TokenServiceTest {
             RefreshRequest request = new RefreshRequest("valid-refresh-token");
             String tokenHash = TokenHashUtil.sha256("valid-refresh-token");
             when(refreshTokenRepository.findByTokenHash(tokenHash)).thenReturn(Optional.of(validStoredToken));
-            when(membershipRepository.findByUserIdAndTenantId(1L, 100L)).thenReturn(Optional.of(activeMembership));
+            when(tenantMembershipResolver.requireActiveMembership(eq(1L), eq(100L), anyString(), anyString()))
+                    .thenReturn(activeMembership);
+            when(tenantMembershipResolver.roleNames(activeMembership)).thenReturn(java.util.List.of("OWNER"));
 
             AuthResponse response = tokenService.refresh(request);
 
@@ -144,8 +146,25 @@ class TokenServiceTest {
             RefreshRequest request = new RefreshRequest("valid-refresh-token");
             String hash = TokenHashUtil.sha256("valid-refresh-token");
             when(refreshTokenRepository.findByTokenHash(hash)).thenReturn(Optional.of(validStoredToken));
-            when(membershipRepository.findByUserIdAndTenantId(1L, 100L)).thenReturn(Optional.empty());
+            when(tenantMembershipResolver.requireActiveMembership(eq(1L), eq(100L), anyString(), anyString()))
+                    .thenThrow(new TenantAccessDeniedException("membership no longer exists"));
             assertThrows(TenantAccessDeniedException.class, () -> tokenService.refresh(request));
+        }
+
+        @Test
+        void refreshReportsMembershipLossWithItsOwnMessageKeys() {
+            RefreshRequest request = new RefreshRequest("valid-refresh-token");
+            String hash = TokenHashUtil.sha256("valid-refresh-token");
+            when(refreshTokenRepository.findByTokenHash(hash)).thenReturn(Optional.of(validStoredToken));
+            when(tenantMembershipResolver.requireActiveMembership(eq(1L), eq(100L), anyString(), anyString()))
+                    .thenReturn(activeMembership);
+            when(tenantMembershipResolver.roleNames(activeMembership)).thenReturn(java.util.List.of("OWNER"));
+
+            tokenService.refresh(request);
+
+            verify(tenantMembershipResolver).requireActiveMembership(1L, 100L,
+                    com.feature_flag.platform.common.config.Messages.TENANT_MEMBERSHIP_NO_LONGER_EXISTS,
+                    com.feature_flag.platform.common.config.Messages.TENANT_MEMBERSHIP_NO_LONGER_ACTIVE);
         }
     }
 

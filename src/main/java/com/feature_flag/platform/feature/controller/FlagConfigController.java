@@ -1,9 +1,11 @@
 package com.feature_flag.platform.feature.controller;
 
 import com.feature_flag.platform.common.security.TenantUserDetails;
+import com.feature_flag.platform.common.security.filter.TenantContextFilter;
 import com.feature_flag.platform.feature.dto.FlagConfigListResponse;
 import com.feature_flag.platform.feature.dto.FlagConfigResponse;
 import com.feature_flag.platform.feature.service.FlagConfigService;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -37,11 +39,10 @@ public class FlagConfigController {
     public ResponseEntity<FlagConfigListResponse> getAll(
             @RequestParam String envName,
             @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch,
-            @AuthenticationPrincipal TenantUserDetails userDetails,
-            @RequestParam(required = false) Long tenantID) {
-        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
-        FlagConfigListResponse response = flagConfigService.getAllFlagConfigs(envName, tenantID);
-        return withEtag(response.lastModified(), ifNoneMatch, response);
+            @AuthenticationPrincipal TenantUserDetails userDetails) {
+        Long tenantId = userDetails.getTenantId();
+        FlagConfigListResponse response = flagConfigService.getAllFlagConfigs(envName, tenantId);
+        return withEtag(tenantId, response.lastModified(), ifNoneMatch, response);
     }
 
     @GetMapping("/{featureKey}")
@@ -49,18 +50,28 @@ public class FlagConfigController {
             @PathVariable String featureKey,
             @RequestParam String envName,
             @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch,
-            @AuthenticationPrincipal TenantUserDetails userDetails,
-            @RequestParam(required = false) Long tenantID) {
-        tenantID = tenantID != null ? tenantID : userDetails.getTenantId();
-        FlagConfigResponse response = flagConfigService.getFlagConfig(featureKey, envName, tenantID);
-        return withEtag(response.lastModified(), ifNoneMatch, response);
+            @AuthenticationPrincipal TenantUserDetails userDetails) {
+        Long tenantId = userDetails.getTenantId();
+        FlagConfigResponse response = flagConfigService.getFlagConfig(featureKey, envName, tenantId);
+        return withEtag(tenantId, response.lastModified(), ifNoneMatch, response);
     }
 
-    private <T> ResponseEntity<T> withEtag(Instant lastModified, String ifNoneMatch, T body) {
-        String etag = "\"" + (lastModified == null ? 0L : lastModified.toEpochMilli()) + "\"";
+    /**
+     * The tenant is part of the ETag, and {@code Vary} names the tenant header: the same URL now returns
+     * different bodies per tenant, so an ETag derived from the timestamp alone would collide across
+     * tenants and any shared cache would need to key on the header.
+     */
+    private <T> ResponseEntity<T> withEtag(Long tenantId, Instant lastModified, String ifNoneMatch, T body) {
+        String etag = "\"" + tenantId + "-" + (lastModified == null ? 0L : lastModified.toEpochMilli()) + "\"";
         if (etag.equals(ifNoneMatch)) {
-            return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag).build();
+            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                    .eTag(etag)
+                    .header(HttpHeaders.VARY, TenantContextFilter.TENANT_HEADER)
+                    .build();
         }
-        return ResponseEntity.ok().eTag(etag).body(body);
+        return ResponseEntity.ok()
+                .eTag(etag)
+                .header(HttpHeaders.VARY, TenantContextFilter.TENANT_HEADER)
+                .body(body);
     }
 }

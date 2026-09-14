@@ -15,6 +15,7 @@ import com.feature_flag.platform.common.exception.InvalidCredentialsException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
 import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
 import com.feature_flag.platform.common.exception.UserSuspendedException;
+import com.feature_flag.platform.common.security.TenantMembershipResolver;
 import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
@@ -54,6 +55,7 @@ class AuthServiceTest {
     @Mock private UserInvitationRepository userInvitationRepository;
     @Mock private TokenService tokenService;
     @Mock private PasswordEncoder passwordEncoder;
+    @Mock private TenantMembershipResolver tenantMembershipResolver;
 
     @InjectMocks private AuthServiceImpl authService;
 
@@ -86,6 +88,7 @@ class AuthServiceTest {
         AuthResponse mockResponseWithTenant = new AuthResponse("access-token", "refresh-token", 1L, "user@test.com", 100L, List.of("OWNER"), 900_000L);
         when(tokenService.createTokenPair(any(), isNull(), any())).thenReturn(mockResponse);
         when(tokenService.createTokenPair(any(), eq(testTenant), any())).thenReturn(mockResponseWithTenant);
+        when(tenantMembershipResolver.roleNames(any())).thenReturn(List.of("OWNER"));
     }
 
     @AfterEach
@@ -169,11 +172,35 @@ class AuthServiceTest {
         }
 
         @Test
+        void specifiedTenant_resolvesThatMembershipDirectly() {
+            LoginRequest request = new LoginRequest("user@test.com", "pass", 100L);
+            when(userRepository.findByEmail("user@test.com")).thenReturn(Optional.of(testUser));
+            when(passwordEncoder.matches("pass", "encoded-pass")).thenReturn(true);
+            when(tenantMembershipResolver.requireActiveMembership(1L, 100L)).thenReturn(activeMembership);
+
+            AuthResponse response = authService.login(request);
+
+            assertEquals(100L, response.tenantId());
+            verify(membershipRepository, never()).findByUserId(any());
+        }
+
+        @Test
         void specifiedTenantNotFound_throwsTenantAccessDenied() {
             LoginRequest request = new LoginRequest("user@test.com", "pass", 999L);
             when(userRepository.findByEmail("user@test.com")).thenReturn(Optional.of(testUser));
             when(passwordEncoder.matches("pass", "encoded-pass")).thenReturn(true);
-            when(membershipRepository.findByUserId(1L)).thenReturn(List.of(activeMembership));
+            when(tenantMembershipResolver.requireActiveMembership(1L, 999L))
+                    .thenThrow(new TenantAccessDeniedException("denied"));
+            assertThrows(TenantAccessDeniedException.class, () -> authService.login(request));
+        }
+
+        @Test
+        void specifiedTenantWithNoMemberships_isDeniedRatherThanDowngraded() {
+            LoginRequest request = new LoginRequest("user@test.com", "pass", 100L);
+            when(userRepository.findByEmail("user@test.com")).thenReturn(Optional.of(testUser));
+            when(passwordEncoder.matches("pass", "encoded-pass")).thenReturn(true);
+            when(tenantMembershipResolver.requireActiveMembership(1L, 100L))
+                    .thenThrow(new TenantAccessDeniedException("denied"));
             assertThrows(TenantAccessDeniedException.class, () -> authService.login(request));
         }
     }
@@ -184,7 +211,7 @@ class AuthServiceTest {
         void success_returnsNewTokensForTargetTenant() {
             SwitchTenantRequest request = new SwitchTenantRequest(100L);
             when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-            when(membershipRepository.findByUserIdAndTenantId(1L, 100L)).thenReturn(Optional.of(activeMembership));
+            when(tenantMembershipResolver.requireActiveMembership(1L, 100L)).thenReturn(activeMembership);
 
             AuthResponse response = authService.switchTenant(request, 1L);
 
@@ -198,22 +225,14 @@ class AuthServiceTest {
             assertThrows(ResourceNotFoundException.class, () -> authService.switchTenant(request, 999L));
         }
 
+        // Whether the membership is missing or merely inactive is decided by TenantMembershipResolver and
+        // covered in TenantMembershipResolverTest; here we only assert the denial reaches the caller.
         @Test
-        void noMembership_throwsTenantAccessDenied() {
+        void membershipDenied_throwsTenantAccessDenied() {
             SwitchTenantRequest request = new SwitchTenantRequest(999L);
             when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-            when(membershipRepository.findByUserIdAndTenantId(1L, 999L)).thenReturn(Optional.empty());
-            assertThrows(TenantAccessDeniedException.class, () -> authService.switchTenant(request, 1L));
-        }
-
-        @Test
-        void inactiveMembership_throwsTenantAccessDenied() {
-            Membership inactive = TestEntityUtil.withId(Membership.builder()
-                    .user(testUser).tenant(testTenant).status(MembershipStatus.REMOVED)
-                    .roles(Set.of(ownerRole)).build(), 204L);
-            SwitchTenantRequest request = new SwitchTenantRequest(100L);
-            when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-            when(membershipRepository.findByUserIdAndTenantId(1L, 100L)).thenReturn(Optional.of(inactive));
+            when(tenantMembershipResolver.requireActiveMembership(1L, 999L))
+                    .thenThrow(new TenantAccessDeniedException("denied"));
             assertThrows(TenantAccessDeniedException.class, () -> authService.switchTenant(request, 1L));
         }
     }
