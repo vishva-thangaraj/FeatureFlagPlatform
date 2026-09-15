@@ -19,7 +19,6 @@ import com.feature_flag.platform.tenant.repository.MembershipRepository;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
 import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -326,7 +325,6 @@ class InvitationAcceptanceIntegrationTest {
      * one-line change.
      */
     @Test
-    @Disabled("Blocked by TenantContextFilter: /api/v1/invitations/** needs adding to TENANT_LESS_PATHS")
     void invitedUserWithNoTenantYet_canStillAccept() throws Exception {
         User solo = userRepository.save(User.builder()
                 .email("solo@corp.com").firstName("Solo").passwordHash("hash")

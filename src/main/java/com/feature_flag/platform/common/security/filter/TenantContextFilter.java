@@ -60,6 +60,17 @@ public class TenantContextFilter extends OncePerRequestFilter {
     /** Everything under it names its tenant in the first path segment rather than in the header. */
     private static final String TENANT_PATH_PREFIX = "/api/v1/tenants/";
 
+    /**
+     * Token-addressed invitation endpoints ({@code /{inviteToken}}, {@code .../accept},
+     * {@code .../decline}). The invitation itself names the tenant, so the caller has no tenant context
+     * yet — an invitee who belongs to no tenant at all, or who is being invited to their second one,
+     * would otherwise be refused here before the controller ever runs.
+     *
+     * <p>Deliberately a prefix and not the collection path: {@code POST /api/v1/invitations} <em>creates</em>
+     * an invitation in the caller's acting tenant and must stay scoped.
+     */
+    private static final String INVITATION_TOKEN_PATH_PREFIX = "/api/v1/invitations/";
+
     private final TenantMembershipResolver tenantMembershipResolver;
     private final FilterErrorWriter errorWriter;
 
@@ -71,7 +82,30 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return TENANT_LESS_PATHS.contains(request.getServletPath());
+        String path = requestPath(request);
+        return TENANT_LESS_PATHS.contains(path) || path.startsWith(INVITATION_TOKEN_PATH_PREFIX);
+    }
+
+    /**
+     * The request path this filter matches its rules against, context path stripped.
+     *
+     * <p>Deliberately not {@code getServletPath()}. That returns the full path only because the dispatcher
+     * servlet is mapped at {@code /}, and it is empty whenever the request was not routed through a servlet
+     * mapping — notably under MockMvc, where {@code getRequestURI()} carries the path instead. Matching on
+     * the servlet path therefore silently matched nothing in every integration test, so the tenant-less and
+     * path-tenant rules below looked covered while never actually running. Deriving the path from the
+     * request URI gives the same answer in production and keeps the tests honest.
+     */
+    private String requestPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        if (uri == null || uri.isEmpty()) {
+            return request.getServletPath();
+        }
+        String contextPath = request.getContextPath();
+        if (contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath)) {
+            uri = uri.substring(contextPath.length());
+        }
+        return uri;
     }
 
     @Override
@@ -87,7 +121,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
             return;
         }
 
-        String pathTenantId = pathTenantId(request.getServletPath());
+        String pathTenantId = pathTenantId(requestPath(request));
 
         Long requestedTenantId;
         try {
