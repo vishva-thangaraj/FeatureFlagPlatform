@@ -4,6 +4,8 @@ import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.ConflictException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
+import com.feature_flag.platform.feature.events.ChangeType;
+import com.feature_flag.platform.feature.events.FeatureChangeEvent;
 import com.feature_flag.platform.feature.dto.*;
 import com.feature_flag.platform.feature.entity.Env;
 import com.feature_flag.platform.feature.entity.Feature;
@@ -13,6 +15,7 @@ import com.feature_flag.platform.feature.entity.FeatureUserOverride;
 import com.feature_flag.platform.feature.mapper.FeatureEnvStatusMapper;
 import com.feature_flag.platform.feature.mapper.FeatureMapper;
 import com.feature_flag.platform.feature.mapper.FeatureRuleMapper;
+import com.feature_flag.platform.feature.messaging.FeatureChanged;
 import com.feature_flag.platform.feature.repository.EnvRepository;
 import com.feature_flag.platform.feature.repository.FeatureEnvStatusRepository;
 import com.feature_flag.platform.feature.repository.FeatureRepository;
@@ -22,13 +25,17 @@ import com.feature_flag.platform.feature.validation.RuleValidator;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
 import jakarta.validation.Valid;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.AuditorAware;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class FeatureService {
@@ -41,6 +48,8 @@ public class FeatureService {
     private final FeatureEnvStatusMapper featureEnvStatusMapper;
     private final FeatureRuleMapper featureRuleMapper;
     private final RuleValidator ruleValidator;
+    private final AuditorAware<Long> auditAware;
+    private final ApplicationEventPublisher eventPublisher;
 
     public FeatureService(FeatureRepository featureRepository,
                           TenantRepository tenantRepository,
@@ -50,7 +59,7 @@ public class FeatureService {
                           FeatureUserOverrideRepository featureUserOverrideRepository,
                           FeatureEnvStatusMapper featureEnvStatusMapper,
                           FeatureRuleMapper featureRuleMapper,
-                          RuleValidator ruleValidator) {
+                          RuleValidator ruleValidator, AuditorAware<Long> auditAware, ApplicationEventPublisher eventPublisher) {
         this.featureRepository = featureRepository;
         this.tenantRepository = tenantRepository;
         this.envRepository = envRepository;
@@ -60,6 +69,8 @@ public class FeatureService {
         this.featureEnvStatusMapper = featureEnvStatusMapper;
         this.featureRuleMapper = featureRuleMapper;
         this.ruleValidator = ruleValidator;
+        this.auditAware = auditAware;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -143,6 +154,20 @@ public class FeatureService {
             featureEnvStatus.setRolloutPercentage(request.rolloutPercentage());
         }
         featureEnvStatusRepository.save(featureEnvStatus);
+
+        FeatureChangeEvent event = FeatureChangeEvent.newBuilder()
+                .setEventId(UUID.randomUUID().toString())
+                .setChangeType(ChangeType.STATUS_CHANGED)
+                .setEnvName(env.getName())
+                .setFeatureKey(feature.getKey())
+                .setTenantId(String.valueOf(tenantId))
+                .setActorUserId(auditAware.getCurrentAuditor().map(Object::toString).orElse(null))
+                .setOccurredAt(Instant.now())
+                .setDetails(Map.of(
+                        "enabled", String.valueOf(featureEnvStatus.isEnabled()),
+                        "rolloutPercentage", String.valueOf(featureEnvStatus.getRolloutPercentage())))
+                .build();
+        eventPublisher.publishEvent(new FeatureChanged(event));
     }
 
     // ---------- Feature env status listing ----------
@@ -173,8 +198,6 @@ public class FeatureService {
     public RuleResponse addRule(Long featureId, Long envId, RuleRequest request, Long tenantId) {
         FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
 
-        // Validate the candidate against the existing set so a new rule cannot create a
-        // contradictory (attribute, operator) pair (TARGETING_PLAN.md §2).
         List<RuleRequest> combined = new ArrayList<>();
         for (FeatureRule existing : featureRuleRepository.findAllByFeatureEnvStatusIdOrderByPriorityAsc(fes.getId())) {
             combined.add(featureRuleMapper.toRuleRequest(existing));
@@ -193,7 +216,29 @@ public class FeatureService {
                 .enabled(request.enabled())
                 .priority(request.priority())
                 .build();
-        return featureRuleMapper.toRuleResponse(featureRuleRepository.save(rule));
+        rule = featureRuleRepository.save(rule);
+
+        FeatureChangeEvent event = FeatureChangeEvent.newBuilder()
+                                .setEventId(UUID.randomUUID().toString())
+                                .setChangeType(ChangeType.RULE_ADDED)
+                                .setEnvName(fes.getEnv().getName())
+                                .setFeatureKey(fes.getFeature().getKey())
+                                .setTenantId(String.valueOf(tenantId))
+                                .setActorUserId(auditAware.getCurrentAuditor().map(Object::toString).orElse(null))
+                                .setOccurredAt(Instant.now())
+                                .setDetails(Map.of(
+                                        "ruleId", String.valueOf(rule.getId()),
+                                        "attribute", rule.getAttribute(),
+                                        "operator", rule.getOperator().name(),
+                                        "valueType", rule.getValueType().name(),
+                                        "valueJson", rule.getValueJson(),
+                                        "caseSensitive", String.valueOf(rule.isCaseSensitive()),
+                                        "negated", String.valueOf(rule.isNegated()),
+                                        "enabled", String.valueOf(rule.isEnabled()),
+                                        "priority", String.valueOf(rule.getPriority())))
+                                .build();
+        eventPublisher.publishEvent(new FeatureChanged(event));
+        return featureRuleMapper.toRuleResponse(rule);
     }
 
     @Transactional
@@ -219,12 +264,35 @@ public class FeatureService {
         rule.setNegated(request.negated());
         rule.setEnabled(request.enabled());
         rule.setPriority(request.priority());
-        return featureRuleMapper.toRuleResponse(featureRuleRepository.save(rule));
+        FeatureRule saved = featureRuleRepository.save(rule);
+
+        publishChange(ChangeType.RULE_UPDATED, saved.getFeatureEnvStatus(), tenantId, Map.of(
+                "ruleId", String.valueOf(saved.getId()),
+                "attribute", saved.getAttribute(),
+                "operator", saved.getOperator().name(),
+                "valueType", saved.getValueType().name(),
+                "valueJson", saved.getValueJson(),
+                "caseSensitive", String.valueOf(saved.isCaseSensitive()),
+                "negated", String.valueOf(saved.isNegated()),
+                "enabled", String.valueOf(saved.isEnabled()),
+                "priority", String.valueOf(saved.getPriority())));
+        return featureRuleMapper.toRuleResponse(saved);
     }
 
     @Transactional
     public void deleteRule(Long featureId, Long ruleId, Long tenantId) {
         FeatureRule rule = findRuleForTenant(featureId, ruleId, tenantId);
+
+        publishChange(ChangeType.RULE_DELETED, rule.getFeatureEnvStatus(), tenantId, Map.of(
+                "ruleId", String.valueOf(rule.getId()),
+                "attribute", rule.getAttribute(),
+                "operator", rule.getOperator().name(),
+                "valueType", rule.getValueType().name(),
+                "valueJson", rule.getValueJson(),
+                "caseSensitive", String.valueOf(rule.isCaseSensitive()),
+                "negated", String.valueOf(rule.isNegated()),
+                "enabled", String.valueOf(rule.isEnabled()),
+                "priority", String.valueOf(rule.getPriority())));
         featureRuleRepository.delete(rule);
     }
 
@@ -250,6 +318,10 @@ public class FeatureService {
                     .build();
             saved.add(featureRuleMapper.toRuleResponse(featureRuleRepository.save(rule)));
         }
+
+        // One coarse event for the whole set swap — the WebSocket consumer re-fetches config anyway.
+        publishChange(ChangeType.RULES_REPLACED, fes, tenantId, Map.of(
+                "ruleCount", String.valueOf(saved.size())));
         return saved;
     }
 
@@ -273,7 +345,12 @@ public class FeatureService {
                         .externalUserId(request.externalUserId())
                         .build());
         override.setEnabled(request.enabled());
-        return featureEnvStatusMapper.toFeatureUserOverrideResponse(featureUserOverrideRepository.save(override));
+        FeatureUserOverride persisted = featureUserOverrideRepository.save(override);
+
+        publishChange(ChangeType.OVERRIDE_SET, fes, tenantId, Map.of(
+                "externalUserId", persisted.getExternalUserId(),
+                "enabled", String.valueOf(persisted.isEnabled())));
+        return featureEnvStatusMapper.toFeatureUserOverrideResponse(persisted);
     }
 
     @Transactional
@@ -283,6 +360,10 @@ public class FeatureService {
                 .findByFeatureEnvStatusIdAndExternalUserId(fes.getId(), externalUserId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         I18N.getMessage(Messages.RESOURCE_FEATURE_OVERRIDE_NOT_FOUND)));
+
+        // Build the event BEFORE the delete, while the override's fields are still readable.
+        publishChange(ChangeType.OVERRIDE_DELETED, fes, tenantId, Map.of(
+                "externalUserId", override.getExternalUserId()));
         featureUserOverrideRepository.delete(override);
     }
 
@@ -304,5 +385,20 @@ public class FeatureService {
             throw new ResourceNotFoundException(I18N.getMessage(Messages.RESOURCE_FEATURE_RULE_NOT_FOUND));
         }
         return rule;
+    }
+
+    private void publishChange(ChangeType changeType, FeatureEnvStatus fes, Long tenantId,
+                               Map<String, String> details) {
+        FeatureChangeEvent event = FeatureChangeEvent.newBuilder()
+                .setEventId(UUID.randomUUID().toString())
+                .setChangeType(changeType)
+                .setTenantId(String.valueOf(tenantId))
+                .setFeatureKey(fes.getFeature().getKey())
+                .setEnvName(fes.getEnv().getName())
+                .setActorUserId(auditAware.getCurrentAuditor().map(Object::toString).orElse(null))
+                .setOccurredAt(Instant.now())
+                .setDetails(details)
+                .build();
+        eventPublisher.publishEvent(new FeatureChanged(event));
     }
 }
