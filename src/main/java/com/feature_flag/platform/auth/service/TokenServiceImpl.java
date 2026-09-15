@@ -4,11 +4,13 @@ import com.feature_flag.platform.auth.dto.AuthResponse;
 import com.feature_flag.platform.auth.dto.RefreshRequest;
 import com.feature_flag.platform.auth.entity.RefreshToken;
 import com.feature_flag.platform.auth.entity.User;
+import com.feature_flag.platform.auth.enums.UserStatus;
 import com.feature_flag.platform.auth.mapper.AuthMapper;
 import com.feature_flag.platform.auth.repository.RefreshTokenRepository;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.InvalidTokenException;
+import com.feature_flag.platform.common.exception.UserSuspendedException;
 import com.feature_flag.platform.common.security.JwtProperties;
 import com.feature_flag.platform.common.security.JwtTokenProvider;
 import com.feature_flag.platform.common.security.TenantMembershipResolver;
@@ -52,21 +54,29 @@ public class TokenServiceImpl implements TokenService {
                         I18N.getMessage(Messages.TOKEN_INVALID)));
 
         if (storedToken.isRevoked()) {
-            if (storedToken.getTenant() != null) {
-                refreshTokenRepository.revokeAllByUserIdAndTenantId(
-                        storedToken.getUser().getId(), storedToken.getTenant().getId());
-            }
+            // Replay of an already-rotated token: the refresh credential is in someone else's hands.
+            // Every live session of this user dies, tenant-scoped or not — including the chain the
+            // thief has been rotating. The revocation is committed in its own transaction because the
+            // 401 below rolls this one back (see RefreshTokenRepository).
+            refreshTokenRepository.revokeAllByUserIdInNewTransaction(storedToken.getUser().getId());
             throw new InvalidTokenException(I18N.getMessage(Messages.TOKEN_REVOKED));
         }
 
         if (storedToken.getExpiresAt().isBefore(Instant.now())) {
-            storedToken.setRevoked(true);
-            refreshTokenRepository.save(storedToken);
+            // Same reasoning: burning the expired token must outlive the 401.
+            refreshTokenRepository.revokeByIdInNewTransaction(storedToken.getId());
             throw new InvalidTokenException(I18N.getMessage(Messages.TOKEN_EXPIRED));
         }
 
         User user = storedToken.getUser();
         Tenant tenant = storedToken.getTenant();
+
+        // Suspension has to bite before the next access token is minted, otherwise a user suspended
+        // after login keeps renewing indefinitely and suspension is unenforceable short of deleting
+        // rows by hand. Mirrors the check AuthServiceImpl.login performs.
+        if (user.getStatus() == UserStatus.SUSPENDED) {
+            throw new UserSuspendedException(I18N.getMessage(Messages.AUTH_USER_SUSPENDED));
+        }
 
         List<String> roles;
         if (tenant != null) {
