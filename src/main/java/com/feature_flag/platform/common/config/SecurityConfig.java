@@ -51,6 +51,13 @@ public class SecurityConfig {
                                 "/api/v1/auth/login",
                                 "/api/v1/auth/refresh",
                                 "/api/v1/auth/logout",
+                                // Acceptance stays reachable without credentials only because an invitee
+                                // who has no account yet registers through it. That makes permitAll the
+                                // *absence* of a check, not a decision that anyone may accept: an
+                                // unauthenticated request here still carries an AnonymousAuthenticationToken,
+                                // so InvitationServiceImpl authorizes acceptance for an already-registered
+                                // invitee by comparing the authenticated principal to the invited user, and
+                                // refuses anonymous and third-party callers there.
                                 "/api/v1/invitations/*/accept",
                                 "/api/v1/invitations/*/decline",
                                 "/api/v1/invitations/*"
