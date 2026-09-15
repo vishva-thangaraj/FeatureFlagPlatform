@@ -33,6 +33,13 @@ import java.util.Set;
  * resolved tenant and its roles are written back into the principal, every controller and service keeps
  * reading {@code userDetails.getTenantId()} and is correctly scoped without changes.
  *
+ * <p>{@code /api/v1/tenants/{tenantId}} names its tenant in the path instead, so for those requests the
+ * path segment is the tenant and the header is ignored. This filter used to skip them entirely, which left
+ * {@code RoleAuthorizationFilter} checking the {@code OWNER} requirement on PUT and DELETE against the
+ * roles baked into the caller's JWT — the roles in their <em>own default</em> tenant. Anyone who created a
+ * tenant therefore carried {@code OWNER} everywhere and could rename or delete any tenant on the platform.
+ * Resolving the path tenant here makes those declarative role rules mean what they say.
+ *
  * <p>Runs after {@code JwtAuthenticationFilter} (which supplies the principal) and before
  * {@code RoleAuthorizationFilter}, so role checks apply to the <em>target</em> tenant's roles.
  */
@@ -50,10 +57,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
             "/api/v1/auth/switch-tenant",
             "/api/v1/tenants");
 
-    /**
-     * {@code /api/v1/tenants/{tenantId}} takes its tenant from the path, not from this header, so it is
-     * authorized in TenantServiceImpl against the path tenant instead.
-     */
+    /** Everything under it names its tenant in the first path segment rather than in the header. */
     private static final String TENANT_PATH_PREFIX = "/api/v1/tenants/";
 
     private final TenantMembershipResolver tenantMembershipResolver;
@@ -67,8 +71,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getServletPath();
-        return TENANT_LESS_PATHS.contains(path) || path.startsWith(TENANT_PATH_PREFIX);
+        return TENANT_LESS_PATHS.contains(request.getServletPath());
     }
 
     @Override
@@ -84,12 +87,20 @@ public class TenantContextFilter extends OncePerRequestFilter {
             return;
         }
 
+        String pathTenantId = pathTenantId(request.getServletPath());
+
         Long requestedTenantId;
         try {
-            requestedTenantId = resolveRequestedTenantId(request, principal);
+            // Not a ternary: mixing Long.parseLong with a nullable Long unboxes the null branch.
+            if (pathTenantId != null) {
+                requestedTenantId = Long.valueOf(pathTenantId);
+            } else {
+                requestedTenantId = resolveRequestedTenantId(request, principal);
+            }
         } catch (NumberFormatException e) {
-            errorWriter.write(response, HttpStatus.BAD_REQUEST,
-                    I18N.getMessage(Messages.TENANT_HEADER_INVALID, TENANT_HEADER));
+            errorWriter.write(response, HttpStatus.BAD_REQUEST, pathTenantId != null
+                    ? I18N.getMessage(Messages.TENANT_PATH_INVALID)
+                    : I18N.getMessage(Messages.TENANT_HEADER_INVALID, TENANT_HEADER));
             return;
         }
 
@@ -116,6 +127,20 @@ public class TenantContextFilter extends OncePerRequestFilter {
         SecurityContextHolder.getContext().setAuthentication(scopedAuthentication);
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * The tenant named in {@code /api/v1/tenants/{tenantId}} (and anything nested under it), or null when
+     * the path carries no tenant of its own and the header/token decides instead.
+     */
+    private String pathTenantId(String path) {
+        if (!path.startsWith(TENANT_PATH_PREFIX)) {
+            return null;
+        }
+        String remainder = path.substring(TENANT_PATH_PREFIX.length());
+        int nextSlash = remainder.indexOf('/');
+        String segment = nextSlash < 0 ? remainder : remainder.substring(0, nextSlash);
+        return segment.isBlank() ? null : segment;
     }
 
     /** Header wins; the token's claim is the caller's default. Null means neither supplied one. */

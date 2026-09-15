@@ -12,9 +12,23 @@ public interface TenantService {
 
     TenantList getTenantsForUser(TenantUserDetails userDetails);
 
+    /**
+     * @throws com.feature_flag.platform.common.exception.TenantAccessDeniedException (403) unless the
+     *         caller holds an ACTIVE membership in {@code tenantId}.
+     */
     TenantResponse getTenant(Long tenantId, TenantUserDetails userDetails);
 
+    /**
+     * @throws com.feature_flag.platform.common.exception.TenantAccessDeniedException (403) unless the
+     *         caller holds an ACTIVE membership in {@code tenantId} with the OWNER role <em>in that
+     *         tenant</em>.
+     */
     TenantResponse updateTenant(Long tenantId, UpdateTenantRequest request, TenantUserDetails userDetails);
 
+    /**
+     * @throws com.feature_flag.platform.common.exception.TenantAccessDeniedException (403) unless the
+     *         caller holds an ACTIVE membership in {@code tenantId} with the OWNER role <em>in that
+     *         tenant</em>.
+     */
     void deleteTenant(Long tenantId, TenantUserDetails userDetails);
 }

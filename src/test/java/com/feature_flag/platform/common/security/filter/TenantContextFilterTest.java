@@ -208,12 +208,11 @@ class TenantContextFilterTest {
     @ParameterizedTest
     @ValueSource(strings = {
             "/api/v1/auth/switch-tenant",
-            "/api/v1/tenants",
-            "/api/v1/tenants/12345"
+            "/api/v1/tenants"
     })
     void tenantLessPaths_areNotFiltered(String path) {
         assertTrue(filter.shouldNotFilter(request(path, null)),
-                "tenant scope for this endpoint comes from the body or path, not the header");
+                "tenant scope for this endpoint comes from the body, not the header");
     }
 
     @ParameterizedTest
@@ -222,10 +221,66 @@ class TenantContextFilterTest {
             "/api/v1/envs",
             "/api/v1/config",
             "/api/v1/members",
-            "/api/v1/invitations"
+            "/api/v1/invitations",
+            // Takes its tenant from the path, but must still be filtered: skipping it left the OWNER role
+            // check on PUT/DELETE running against the caller's own default tenant.
+            "/api/v1/tenants/12345"
     })
     void tenantScopedPaths_areFiltered(String path) {
         assertFalse(filter.shouldNotFilter(request(path, null)));
+    }
+
+    @Test
+    void tenantPath_resolvesTheTenantFromThePath_notTheToken() throws ServletException, IOException {
+        authenticateAs(1L, 1L, "OWNER");
+        Membership membership = activeMembershipWith("VIEWER");
+        when(tenantMembershipResolver.requireActiveMembership(1L, 2L)).thenReturn(membership);
+        when(tenantMembershipResolver.roleNames(membership)).thenReturn(List.of("VIEWER"));
+
+        filter.doFilter(request("/api/v1/tenants/2", null), new MockHttpServletResponse(), filterChain);
+
+        assertEquals(2L, currentPrincipal().getTenantId());
+        assertEquals(List.of("VIEWER"), currentPrincipal().getRoles(),
+                "the OWNER in the token must not survive into a tenant the caller only views");
+        verify(tenantMembershipResolver).requireActiveMembership(1L, 2L);
+    }
+
+    @Test
+    void tenantPath_ignoresTheHeader() throws ServletException, IOException {
+        authenticateAs(1L, 1L, "OWNER");
+        Membership membership = activeMembershipWith("OWNER");
+        when(tenantMembershipResolver.requireActiveMembership(1L, 2L)).thenReturn(membership);
+        when(tenantMembershipResolver.roleNames(membership)).thenReturn(List.of("OWNER"));
+
+        filter.doFilter(request("/api/v1/tenants/2", "99"), new MockHttpServletResponse(), filterChain);
+
+        assertEquals(2L, currentPrincipal().getTenantId());
+        verify(tenantMembershipResolver, never()).requireActiveMembership(1L, 99L);
+    }
+
+    @Test
+    void tenantPath_withoutMembership_isForbidden() throws ServletException, IOException {
+        authenticateAs(1L, 1L, "OWNER");
+        when(tenantMembershipResolver.requireActiveMembership(1L, 99L))
+                .thenThrow(new TenantAccessDeniedException("no membership"));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request("/api/v1/tenants/99", null), response, filterChain);
+
+        assertEquals(403, response.getStatus());
+        assertNull(filterChain.getRequest(), "the request must not reach the controller");
+    }
+
+    @Test
+    void tenantPath_thatIsNotNumeric_isBadRequest() throws ServletException, IOException {
+        authenticateAs(1L, 1L, "OWNER");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request("/api/v1/tenants/not-a-number", null), response, filterChain);
+
+        assertEquals(400, response.getStatus());
+        assertNull(filterChain.getRequest());
+        verifyNoInteractions(tenantMembershipResolver);
     }
 
     @Test
