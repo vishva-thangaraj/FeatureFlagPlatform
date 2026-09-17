@@ -1,13 +1,17 @@
 package com.feature_flag.platform.tenant.service;
 
 import com.feature_flag.platform.auth.dto.AuthResponse;
+import com.feature_flag.platform.auth.dto.RegisterRequest;
+import com.feature_flag.platform.auth.entity.Role;
 import com.feature_flag.platform.auth.entity.User;
 import com.feature_flag.platform.auth.enums.RoleName;
 import com.feature_flag.platform.auth.repository.RoleRepository;
 import com.feature_flag.platform.auth.repository.UserRepository;
+import com.feature_flag.platform.auth.service.AuthService;
 import com.feature_flag.platform.auth.service.TokenService;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
+import com.feature_flag.platform.common.exception.ForbiddenException;
 import com.feature_flag.platform.common.exception.InvalidTokenException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
 import com.feature_flag.platform.common.exception.UnauthorizedException;
@@ -24,14 +28,13 @@ import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
 import com.feature_flag.platform.tenant.repository.MembershipRepository;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -45,6 +48,7 @@ public class InvitationServiceImpl implements InvitationService {
     private final JwtProperties jwtProperties;
     private final EmailService emailService;
     private final TokenService tokenService;
+    private final AuthService authService;
 
     public InvitationServiceImpl(UserInvitationRepository userInvitationRepository,
                                  UserRepository userRepository,
@@ -52,7 +56,9 @@ public class InvitationServiceImpl implements InvitationService {
                                  RoleRepository roleRepository,
                                  TenantRepository tenantRepository,
                                  JwtProperties jwtProperties,
-                                 EmailService emailService, TokenService tokenService) {
+                                 EmailService emailService,
+                                 TokenService tokenService,
+                                 AuthService authService) {
         this.userInvitationRepository = userInvitationRepository;
         this.userRepository = userRepository;
         this.membershipRepository = membershipRepository;
@@ -61,46 +67,79 @@ public class InvitationServiceImpl implements InvitationService {
         this.jwtProperties = jwtProperties;
         this.emailService = emailService;
         this.tokenService = tokenService;
+        this.authService = authService;
     }
 
+    /**
+     * Accepts an invitation on behalf of the invited person — and only them.
+     *
+     * <p>Security: the invite token is a bearer capability that also travels in a mail URL's query string,
+     * so it leaks through forwarded mail, browser history and proxy logs. It therefore proves only that the
+     * <em>invitation</em> is genuine, never that the caller is the invitee. Acceptance is authorized by who
+     * the caller is, in one of exactly two ways:
+     *
+     * <ul>
+     *   <li><b>The invited address already has an account.</b> The caller must be authenticated as that
+     *       user — {@code caller.getUserId()} is compared to the id of the user the invitation resolves to.
+     *       A missing principal is rejected with 401. Note that an unauthenticated request on this
+     *       {@code permitAll} path still carries an {@code AnonymousAuthenticationToken}, so a null-check on
+     *       {@code SecurityContextHolder} would pass; {@code caller} is resolved with
+     *       {@code @AuthenticationPrincipal TenantUserDetails}, which is null for an anonymous principal
+     *       (its principal is the String {@code "anonymousUser"}) and so cannot slip through.</li>
+     *   <li><b>The invited address has no account yet.</b> The caller registers it here, in the same
+     *       request, and the registration's email must equal the invited address. The resulting account is
+     *       one the caller just created with a password of their choosing, so issuing tokens for it grants
+     *       nothing they did not already control.</li>
+     * </ul>
+     *
+     * <p>Possession of the invite token alone never yields a token pair for an existing account.
+     */
     @Override
     @Transactional
-    public InvitationResponse acceptInvitation(String rawToken) {
-        String tokenHash = TokenHashUtil.sha256(rawToken);
+    public InvitationResponse acceptInvitation(String rawToken, RegisterRequest registration,
+                                               TenantUserDetails caller) {
+        UserInvitation invitation = requirePendingInvitation(rawToken);
+        String invitedEmail = invitation.getEmail();
 
-        UserInvitation invitation = userInvitationRepository.findByTokenHash(tokenHash)
-                .orElseThrow(() -> new InvalidTokenException(
-                        I18N.getMessage(Messages.INVITATION_TOKEN_INVALID)));
-
-        if (invitation.getStatus() != InvitationStatus.PENDING) {
-            throw new IllegalStateException(
-                    I18N.getMessage(Messages.INVITATION_ALREADY_PROCESSED));
-        }
-
-        if (invitation.getExpiresAt().isBefore(Instant.now())) {
-            invitation.setStatus(InvitationStatus.EXPIRED);
-            userInvitationRepository.save(invitation);
-            throw new InvalidTokenException(
-                    I18N.getMessage(Messages.INVITATION_EXPIRED));
-        }
-
-        Optional<User> existingUser = userRepository.findByEmail(invitation.getEmail());
+        Optional<User> existingUser = userRepository.findByEmail(invitedEmail);
+        User invitee;
 
         if (existingUser.isPresent()) {
-            if(SecurityContextHolder.getContext().getAuthentication() == null)
-            {
-                throw new UnauthorizedException(
-                        I18N.getMessage(Messages.UNAUTHORIZED));
-            }
-            createMembership(existingUser.get(), invitation);
-            invitation.setStatus(InvitationStatus.ACCEPTED);
-            userInvitationRepository.save(invitation);
-            AuthResponse authResponse = tokenService.createTokenPair(existingUser.get(), null, Collections.emptyList());
-            return new InvitationResponse("Invitation accepted", InvitationStatus.ACCEPTED, authResponse);
+            invitee = existingUser.get();
+            requireCallerIsInvitee(caller, invitee);
         } else {
-
-            return new InvitationResponse("Please register to complete your invitation", InvitationStatus.PENDING_UNREGISTERED, null);
+            if (registration == null) {
+                // Nothing to accept as yet: the client is expected to come back with a registration.
+                return new InvitationResponse(
+                        I18N.getMessage(Messages.INVITATION_REGISTRATION_REQUIRED),
+                        InvitationStatus.PENDING_UNREGISTERED, null);
+            }
+            if (!invitedEmail.equalsIgnoreCase(registration.email())) {
+                throw new ForbiddenException(
+                        I18N.getMessage(Messages.INVITATION_REGISTRATION_EMAIL_MISMATCH));
+            }
+            authService.register(registration);
+            invitee = userRepository.findByEmail(invitedEmail)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            I18N.getMessage(Messages.RESOURCE_USER_NOT_FOUND)));
         }
+
+        Role role = roleRepository.findByName(invitation.getRole().name())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_ROLE_NOT_FOUND, invitation.getRole().name())));
+
+        activateMembership(invitee, invitation.getTenant(), role);
+
+        invitation.setStatus(InvitationStatus.ACCEPTED);
+        userInvitationRepository.save(invitation);
+
+        // Scoped to the tenant just joined, with the granted role — a tenant-less, role-less token would
+        // 403 on every tenant endpoint until the client happened to call switch-tenant.
+        AuthResponse authResponse = tokenService.createTokenPair(
+                invitee, invitation.getTenant(), List.of(role.getName()));
+
+        return new InvitationResponse(I18N.getMessage(Messages.INVITATION_ACCEPTED),
+                InvitationStatus.ACCEPTED, authResponse);
     }
 
     @Override
@@ -184,16 +223,59 @@ public class InvitationServiceImpl implements InvitationService {
         userInvitationRepository.save(invitation);
     }
 
-    private void createMembership(User user, UserInvitation invitation) {
-        var role = roleRepository.findByName(invitation.getRole().name())
-                .orElseThrow();
+    private UserInvitation requirePendingInvitation(String rawToken) {
+        String tokenHash = TokenHashUtil.sha256(rawToken);
 
-        Membership membership = Membership.builder()
-                .user(user)
-                .tenant(invitation.getTenant())
-                .roles(Set.of(role))
-                .status(MembershipStatus.ACTIVE)
-                .build();
+        UserInvitation invitation = userInvitationRepository.findByTokenHash(tokenHash)
+                .orElseThrow(() -> new InvalidTokenException(
+                        I18N.getMessage(Messages.INVITATION_TOKEN_INVALID)));
+
+        if (invitation.getStatus() != InvitationStatus.PENDING) {
+            throw new IllegalStateException(
+                    I18N.getMessage(Messages.INVITATION_ALREADY_PROCESSED));
+        }
+
+        if (invitation.getExpiresAt().isBefore(Instant.now())) {
+            invitation.setStatus(InvitationStatus.EXPIRED);
+            userInvitationRepository.save(invitation);
+            throw new InvalidTokenException(I18N.getMessage(Messages.INVITATION_EXPIRED));
+        }
+        return invitation;
+    }
+
+    /**
+     * The whole point of the fix: the caller must <em>be</em> the invited user, not merely hold the token
+     * addressed to them.
+     */
+    private void requireCallerIsInvitee(TenantUserDetails caller, User invitee) {
+        if (caller == null || caller.getUserId() == null) {
+            throw new UnauthorizedException(
+                    I18N.getMessage(Messages.INVITATION_AUTHENTICATION_REQUIRED));
+        }
+        if (!caller.getUserId().equals(invitee.getId())) {
+            throw new ForbiddenException(
+                    I18N.getMessage(Messages.INVITATION_NOT_FOR_CALLER));
+        }
+    }
+
+    /**
+     * Idempotent: {@code memberships} is unique on (user, tenant), so re-inviting someone who is already a
+     * member — or re-inviting a removed member — has to update the row rather than insert a second one,
+     * which used to surface as an unhandled DataIntegrityViolationException (500).
+     */
+    private void activateMembership(User user, Tenant tenant, Role role) {
+        Membership membership = membershipRepository
+                .findByUserIdAndTenantId(user.getId(), tenant.getId())
+                .orElseGet(() -> Membership.builder()
+                        .user(user)
+                        .tenant(tenant)
+                        .roles(new HashSet<>())
+                        .build());
+
+        membership.setStatus(MembershipStatus.ACTIVE);
+        // Mutate in place rather than swapping the set: the entity may be managed.
+        membership.getRoles().clear();
+        membership.getRoles().add(role);
         membershipRepository.save(membership);
     }
 }

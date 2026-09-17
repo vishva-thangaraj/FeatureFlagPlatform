@@ -11,6 +11,7 @@ import com.feature_flag.platform.auth.repository.RefreshTokenRepository;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.exception.InvalidTokenException;
 import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
+import com.feature_flag.platform.common.exception.UserSuspendedException;
 import com.feature_flag.platform.common.security.JwtProperties;
 import com.feature_flag.platform.common.security.JwtTokenProvider;
 import com.feature_flag.platform.common.security.TenantMembershipResolver;
@@ -121,16 +122,41 @@ class TokenServiceTest {
             assertThrows(InvalidTokenException.class, () -> tokenService.refresh(request));
         }
 
+        /**
+         * Containment is user-wide, not tenant-wide: a replay proves the credential leaked, so the
+         * user's sessions in every tenant go, not just the tenant the replayed token carried.
+         */
         @Test
-        void revokedToken_triggersReplayDetection() {
+        void revokedToken_triggersReplayDetectionForEverySessionOfTheUser() {
             validStoredToken.setRevoked(true);
             RefreshRequest request = new RefreshRequest("valid-refresh-token");
             String hash = TokenHashUtil.sha256("valid-refresh-token");
             when(refreshTokenRepository.findByTokenHash(hash)).thenReturn(Optional.of(validStoredToken));
             assertThrows(InvalidTokenException.class, () -> tokenService.refresh(request));
-            verify(refreshTokenRepository).revokeAllByUserIdAndTenantId(1L, 100L);
+            verify(refreshTokenRepository).revokeAllByUserIdInNewTransaction(1L);
         }
 
+        /** Tokens minted by register, or by login without an active membership, carry no tenant. */
+        @Test
+        void revokedTenantLessToken_stillTriggersReplayDetection() {
+            RefreshToken tenantLessToken = TestEntityUtil.withId(RefreshToken.builder()
+                    .user(testUser).tenant(null)
+                    .tokenHash(TokenHashUtil.sha256("tenant-less-token"))
+                    .expiresAt(Instant.now().plusSeconds(3600)).revoked(true).build(), 310L);
+            RefreshRequest request = new RefreshRequest("tenant-less-token");
+            when(refreshTokenRepository.findByTokenHash(TokenHashUtil.sha256("tenant-less-token")))
+                    .thenReturn(Optional.of(tenantLessToken));
+
+            assertThrows(InvalidTokenException.class, () -> tokenService.refresh(request));
+
+            verify(refreshTokenRepository).revokeAllByUserIdInNewTransaction(1L);
+        }
+
+        /**
+         * Revoking through the repository's own REQUIRES_NEW update rather than a dirty-checked
+         * {@code save} in the doomed request transaction is the whole point of the fix, so this asserts
+         * the call — {@link TokenServiceRefreshPersistenceIntegrationTest} asserts it actually commits.
+         */
         @Test
         void expiredToken_revokesAndThrows() {
             validStoredToken.setExpiresAt(Instant.now().minusSeconds(60));
@@ -138,7 +164,21 @@ class TokenServiceTest {
             String hash = TokenHashUtil.sha256("valid-refresh-token");
             when(refreshTokenRepository.findByTokenHash(hash)).thenReturn(Optional.of(validStoredToken));
             assertThrows(InvalidTokenException.class, () -> tokenService.refresh(request));
-            assertTrue(validStoredToken.isRevoked());
+            verify(refreshTokenRepository).revokeByIdInNewTransaction(300L);
+            verify(refreshTokenRepository, never()).save(any(RefreshToken.class));
+        }
+
+        @Test
+        void suspendedUser_isRefusedAndGetsNoNewTokens() {
+            testUser.setStatus(UserStatus.SUSPENDED);
+            RefreshRequest request = new RefreshRequest("valid-refresh-token");
+            String hash = TokenHashUtil.sha256("valid-refresh-token");
+            when(refreshTokenRepository.findByTokenHash(hash)).thenReturn(Optional.of(validStoredToken));
+
+            assertThrows(UserSuspendedException.class, () -> tokenService.refresh(request));
+
+            verify(refreshTokenRepository, never()).save(any(RefreshToken.class));
+            verify(jwtTokenProvider, never()).generateAccessToken(any(), anyString(), any(), any());
         }
 
         @Test
