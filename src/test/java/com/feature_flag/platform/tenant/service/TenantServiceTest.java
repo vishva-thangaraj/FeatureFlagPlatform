@@ -5,17 +5,23 @@ import com.feature_flag.platform.auth.entity.User;
 import com.feature_flag.platform.auth.enums.UserStatus;
 import com.feature_flag.platform.auth.repository.RoleRepository;
 import com.feature_flag.platform.auth.repository.UserRepository;
+import com.feature_flag.platform.auth.enums.RoleName;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
+import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
+import com.feature_flag.platform.common.security.TenantMembershipResolver;
 import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.tenant.dto.TenantCreationRequest;
 import com.feature_flag.platform.tenant.dto.TenantList;
 import com.feature_flag.platform.tenant.dto.TenantResponse;
+import com.feature_flag.platform.tenant.dto.UpdateTenantRequest;
+import com.feature_flag.platform.tenant.entity.ApiKey;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
 import com.feature_flag.platform.tenant.enums.TenantPlan;
 import com.feature_flag.platform.tenant.mapper.TenantMapper;
+import com.feature_flag.platform.tenant.repository.ApiKeyRepository;
 import com.feature_flag.platform.tenant.repository.MembershipRepository;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
 import com.feature_flag.platform.util.TestEntityUtil;
@@ -34,6 +40,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -44,6 +51,8 @@ class TenantServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private MembershipRepository membershipRepository;
     @Mock private RoleRepository roleRepository;
+    @Mock private ApiKeyRepository apiKeyRepository;
+    @Mock private TenantMembershipResolver tenantMembershipResolver;
 
     private TenantMapper tenantMapper = new TenantMapper();
     private TenantServiceImpl tenantService;
@@ -56,7 +65,8 @@ class TenantServiceTest {
 
     @BeforeEach
     void setUp() {
-        tenantService = new TenantServiceImpl(tenantRepository, userRepository, membershipRepository, roleRepository, tenantMapper);
+        tenantService = new TenantServiceImpl(tenantRepository, userRepository, membershipRepository,
+                roleRepository, apiKeyRepository, tenantMembershipResolver, tenantMapper);
 
         i18nMock = mockStatic(I18N.class);
         i18nMock.when(() -> I18N.getMessage(anyString())).thenAnswer(inv -> inv.getArgument(0));
@@ -127,5 +137,127 @@ class TenantServiceTest {
         when(membershipRepository.findByUserId(1L)).thenReturn(Collections.emptyList());
         TenantList result = tenantService.getTenantsForUser(userDetails);
         assertTrue(result.tenants().isEmpty());
+    }
+
+    // --- /api/v1/tenants/{tenantId}: authorization is against the PATH tenant -----------------------
+
+    private Membership activeMembership(Role... roles) {
+        return TestEntityUtil.withId(Membership.builder()
+                .user(testUser).tenant(testTenant).status(MembershipStatus.ACTIVE)
+                .roles(Set.of(roles)).build(), 200L);
+    }
+
+    @Test
+    void getTenant_requiresAnActiveMembershipInThatTenant() {
+        Membership membership = activeMembership(ownerRole);
+        when(tenantMembershipResolver.requireActiveMembership(1L, 100L)).thenReturn(membership);
+
+        TenantResponse response = tenantService.getTenant(100L, userDetails);
+
+        assertEquals("100", response.id());
+        verify(tenantMembershipResolver).requireActiveMembership(1L, 100L);
+    }
+
+    /**
+     * The old lookup accepted any membership row, ACTIVE or not, so a REMOVED or INVITED member kept read
+     * access to the tenant.
+     */
+    @Test
+    void getTenant_withoutAnActiveMembership_isForbidden() {
+        when(tenantMembershipResolver.requireActiveMembership(1L, 100L))
+                .thenThrow(new TenantAccessDeniedException("not active"));
+
+        assertThrows(TenantAccessDeniedException.class, () -> tenantService.getTenant(100L, userDetails));
+    }
+
+    @Test
+    void updateTenant_asOwnerOfThatTenant_renamesIt() {
+        Membership membership = activeMembership(ownerRole);
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
+                .thenReturn(membership);
+
+        TenantResponse response = tenantService.updateTenant(100L, new UpdateTenantRequest("Renamed"), userDetails);
+
+        assertEquals("Renamed", response.name());
+        assertEquals("Renamed", testTenant.getName());
+        verify(tenantRepository).save(testTenant);
+    }
+
+    @Test
+    void updateTenant_nullName_leavesTheNameAlone() {
+        Membership membership = activeMembership(ownerRole);
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
+                .thenReturn(membership);
+
+        tenantService.updateTenant(100L, new UpdateTenantRequest(null), userDetails);
+
+        assertEquals("TestOrg", testTenant.getName());
+    }
+
+    /** A VIEWER in the target tenant used to be able to rename it — updateTenant checked no role at all. */
+    @Test
+    void updateTenant_withoutOwnerInThatTenant_isForbiddenAndWritesNothing() {
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
+                .thenThrow(new TenantAccessDeniedException("role required"));
+
+        assertThrows(TenantAccessDeniedException.class,
+                () -> tenantService.updateTenant(100L, new UpdateTenantRequest("Hijacked"), userDetails));
+
+        assertEquals("TestOrg", testTenant.getName());
+        verify(tenantRepository, never()).save(any(Tenant.class));
+    }
+
+    @Test
+    void deleteTenant_asOwnerOfThatTenant_removesTheTenantAndItsChildren() {
+        Membership membership = activeMembership(ownerRole);
+        ApiKey apiKey = TestEntityUtil.withId(ApiKey.builder()
+                .tenant(testTenant).name("ci").keyHash("hash").build(), 300L);
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
+                .thenReturn(membership);
+        when(tenantRepository.findById(100L)).thenReturn(Optional.of(testTenant));
+        when(apiKeyRepository.findByTenantId(100L)).thenReturn(List.of(apiKey));
+        when(membershipRepository.findByTenantId(100L)).thenReturn(List.of(membership));
+
+        tenantService.deleteTenant(100L, userDetails);
+
+        verify(apiKeyRepository).deleteAll(List.of(apiKey));
+        verify(membershipRepository).deleteAll(List.of(membership));
+        verify(tenantRepository).delete(testTenant);
+    }
+
+    /**
+     * The exploit, at the service layer: {@code deleteTenant} performed no membership lookup whatsoever, so
+     * any caller who got past the (wrongly scoped) role filter could delete any tenant by id.
+     */
+    @Test
+    void deleteTenant_withoutOwnerInThatTenant_isForbiddenAndDeletesNothing() {
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
+                .thenThrow(new TenantAccessDeniedException("role required"));
+
+        assertThrows(TenantAccessDeniedException.class, () -> tenantService.deleteTenant(100L, userDetails));
+
+        verify(tenantRepository, never()).delete(any(Tenant.class));
+        verify(tenantRepository, never()).findById(anyLong());
+        verifyNoInteractions(apiKeyRepository);
+    }
+
+    /** Authorization runs before the lookup, so a missing tenant is a 403, not a 404 existence oracle. */
+    @Test
+    void deleteTenant_authorizesBeforeItLooksTheTenantUp() {
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 999L, RoleName.OWNER))
+                .thenThrow(new TenantAccessDeniedException("no membership"));
+
+        assertThrows(TenantAccessDeniedException.class, () -> tenantService.deleteTenant(999L, userDetails));
+
+        verifyNoInteractions(tenantRepository);
+    }
+
+    @Test
+    void deleteTenant_tenantRowMissing_throwsNotFound() {
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
+                .thenReturn(activeMembership(ownerRole));
+        when(tenantRepository.findById(100L)).thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> tenantService.deleteTenant(100L, userDetails));
     }
 }

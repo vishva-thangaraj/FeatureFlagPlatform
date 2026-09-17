@@ -1,6 +1,7 @@
 package com.feature_flag.platform.common.security;
 
 import com.feature_flag.platform.auth.entity.Role;
+import com.feature_flag.platform.auth.enums.RoleName;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
@@ -9,6 +10,7 @@ import com.feature_flag.platform.tenant.enums.MembershipStatus;
 import com.feature_flag.platform.tenant.repository.MembershipRepository;
 import org.springframework.stereotype.Component;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -48,6 +50,29 @@ public class TenantMembershipResolver {
 
         if (membership.getStatus() != MembershipStatus.ACTIVE) {
             throw new TenantAccessDeniedException(I18N.getMessage(inactiveMessageKey));
+        }
+        return membership;
+    }
+
+    /**
+     * As {@link #requireActiveMembership(Long, Long)}, but additionally requires the membership to carry
+     * at least one of {@code requiredRoles} <em>in that tenant</em>.
+     *
+     * <p>Endpoints that take their tenant from the path rather than from {@code X-Tenant-Id} cannot lean on
+     * {@code RoleAuthorizationFilter} alone: they need the role check bound to the tenant the request
+     * actually names, and they need it to survive anyone later changing the filter chain.
+     *
+     * @throws TenantAccessDeniedException (403) if the membership is missing, not ACTIVE, or holds none of
+     *                                    the required roles.
+     */
+    public Membership requireActiveMembershipWithAnyRole(Long userId, Long tenantId, RoleName... requiredRoles) {
+        Membership membership = requireActiveMembership(userId, tenantId);
+
+        List<String> required = Arrays.stream(requiredRoles).map(RoleName::name).toList();
+        boolean holdsOne = roleNames(membership).stream().anyMatch(required::contains);
+        if (!holdsOne) {
+            throw new TenantAccessDeniedException(
+                    I18N.getMessage(Messages.TENANT_ROLE_REQUIRED, String.join(", ", required)));
         }
         return membership;
     }

@@ -55,8 +55,13 @@ the role checks below come from that membership.
 | Caller's membership is not ACTIVE                      | `403`    |
 | No header and no `tenantId` claim, on a scoped endpoint | `403`    |
 
-**Not tenant-scoped**, so the header is ignored: `POST /api/v1/auth/switch-tenant`,
-`GET`/`POST /api/v1/tenants`, and `/api/v1/tenants/{tenantId}` (which takes its tenant from the path).
+**Not tenant-scoped**, so the header is ignored: `POST /api/v1/auth/switch-tenant` and
+`GET`/`POST /api/v1/tenants`.
+
+`/api/v1/tenants/{tenantId}` **is** tenant-scoped, but it names its tenant in the path, so the header is
+ignored there too. The path tenant is authorized exactly like a header tenant — ACTIVE membership required,
+and the roles for the role checks below are read from that membership — so the table above applies to it
+with the path segment in place of the header (a non-numeric path segment is likewise a `400`).
 
 > A `tenantID` **query parameter** was previously accepted on the feature, env and config endpoints. It was
 > never authorized against the caller's memberships and has been removed. Supplying it now has no effect —
@@ -297,6 +302,70 @@ List all tenants the authenticated user belongs to.
   ]
 }
 ```
+
+---
+
+#### `GET /api/v1/tenants/{tenantId}` (Protected)
+
+Read one tenant. The tenant comes from the path; `X-Tenant-Id` is ignored.
+
+**Requires:** an **ACTIVE** membership in `{tenantId}`. A membership that is `INVITED` or `REMOVED` is not
+enough — those callers get `403`, the same as a caller with no membership at all, so the endpoint does not
+reveal whether the tenant exists.
+
+**Response:** `200 OK` — same shape as an entry of `GET /api/v1/tenants` (the `roles` are the caller's
+roles in this tenant).
+
+| Condition                                   | Response |
+|---------------------------------------------|----------|
+| No membership, or membership is not ACTIVE  | `403`    |
+
+---
+
+#### `PUT /api/v1/tenants/{tenantId}` (Protected)
+
+Rename a tenant.
+
+**Requires:** an **ACTIVE** membership in `{tenantId}` **with the `OWNER` role in that tenant**. Being
+OWNER of a different tenant grants nothing here.
+
+**Request:**
+
+```json
+{
+  "name": "Renamed Organization"
+}
+```
+
+| Field  | Type   | Required | Constraints        |
+|--------|--------|----------|--------------------|
+| `name` | String | No       | Max 255 characters |
+
+**Response:** `200 OK` — the updated tenant.
+
+| Condition                                   | Response |
+|---------------------------------------------|----------|
+| No membership, or membership is not ACTIVE  | `403`    |
+| Membership is ACTIVE but not `OWNER`        | `403`    |
+
+---
+
+#### `DELETE /api/v1/tenants/{tenantId}` (Protected)
+
+Delete a tenant.
+
+**Requires:** an **ACTIVE** membership in `{tenantId}` **with the `OWNER` role in that tenant**.
+
+**Response:** `204 No Content`
+
+| Condition                                   | Response |
+|---------------------------------------------|----------|
+| No membership, or membership is not ACTIVE  | `403`    |
+| Membership is ACTIVE but not `OWNER`        | `403`    |
+
+> Deleting a tenant removes its memberships and API keys. Invitations, features and environments belonging
+> to the tenant are **not** cleaned up yet, so deleting a tenant that still has any of them fails on a
+> foreign-key constraint. Delete those first.
 
 ---
 

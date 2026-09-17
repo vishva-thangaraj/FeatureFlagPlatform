@@ -1,7 +1,6 @@
 package com.feature_flag.platform.tenant.controller;
 
 import com.feature_flag.platform.auth.dto.RegisterRequest;
-import com.feature_flag.platform.auth.service.AuthService;
 import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.tenant.dto.InvitationResponse;
 import com.feature_flag.platform.tenant.dto.UserInviteRequest;
@@ -16,11 +15,9 @@ import org.springframework.web.bind.annotation.*;
 public class InvitationController {
 
     private final InvitationService invitationService;
-    private final AuthService authService;
 
-    public InvitationController(InvitationService invitationService, AuthService authService) {
+    public InvitationController(InvitationService invitationService) {
         this.invitationService = invitationService;
-        this.authService = authService;
     }
 
     @PostMapping
@@ -30,24 +27,41 @@ public class InvitationController {
         return ResponseEntity.ok().build();
     }
 
+    /**
+     * Serves both halves of acceptance, and the service decides which applies from whether the invited
+     * address already has an account:
+     *
+     * <ul>
+     *   <li>an already-registered invitee sends no body and must be authenticated as themselves;</li>
+     *   <li>an invitee with no account yet sends a {@link RegisterRequest} for the invited address and
+     *       legitimately has no credentials.</li>
+     * </ul>
+     *
+     * <p>Because the second case has no session, the path stays {@code permitAll} and authorization lives
+     * in the service. {@code userDetails} is null for an anonymous request — {@code @AuthenticationPrincipal}
+     * does not bind the {@code "anonymousUser"} String to {@link TenantUserDetails} — so an unauthenticated
+     * caller reaches the service as "no caller" rather than as a non-null {@code Authentication}, which is
+     * exactly what the old {@code getAuthentication() == null} guard got wrong.
+     *
+     * <p>Registration is delegated to the service so that creating the account, the membership and the
+     * status change all happen in one transaction.
+     */
     @PostMapping("/{inviteToken}/accept")
     public ResponseEntity<InvitationResponse> acceptInvitation(@PathVariable("inviteToken") String token,
-                                                                @RequestBody(required = false) @Valid RegisterRequest request) {
-        if (request != null) {
-            authService.register(request);
-        }
-        InvitationResponse result = invitationService.acceptInvitation(token);
+                                                                @RequestBody(required = false) @Valid RegisterRequest request,
+                                                                @AuthenticationPrincipal TenantUserDetails userDetails) {
+        InvitationResponse result = invitationService.acceptInvitation(token, request, userDetails);
         return ResponseEntity.ok(result);
     }
+
     @PostMapping("/{inviteToken}/decline")
     public ResponseEntity<Void> declineInvitation(@PathVariable("inviteToken") String token) {
         invitationService.declineInvitation(token);
-        ResponseEntity.status(204).build();
         return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/{inviteToken}")
-    public ResponseEntity<InvitationResponse> getInvitationStatus(@PathVariable String token) {
+    public ResponseEntity<InvitationResponse> getInvitationStatus(@PathVariable("inviteToken") String token) {
         InvitationResponse response = invitationService.getStatus(token);
         return ResponseEntity.ok(response);
     }
