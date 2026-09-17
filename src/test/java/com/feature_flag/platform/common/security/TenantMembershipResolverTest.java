@@ -2,6 +2,7 @@ package com.feature_flag.platform.common.security;
 
 import com.feature_flag.platform.auth.entity.Role;
 import com.feature_flag.platform.auth.entity.User;
+import com.feature_flag.platform.auth.enums.RoleName;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
@@ -118,6 +119,43 @@ class TenantMembershipResolverTest {
                 () -> resolver.requireActiveMembership(1L, 100L,
                         Messages.TENANT_MEMBERSHIP_NO_LONGER_EXISTS, Messages.TENANT_MEMBERSHIP_NO_LONGER_ACTIVE));
         assertEquals(Messages.TENANT_MEMBERSHIP_NO_LONGER_ACTIVE, ex.getMessage());
+    }
+
+    @Test
+    void requireRole_returnsTheMembershipWhenItHoldsTheRole() {
+        Membership active = membership(MembershipStatus.ACTIVE, "OWNER");
+        when(membershipRepository.findWithRolesByUserIdAndTenantId(1L, 100L)).thenReturn(Optional.of(active));
+
+        assertSame(active, resolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER));
+    }
+
+    @Test
+    void requireRole_anyOneOfSeveralIsEnough() {
+        when(membershipRepository.findWithRolesByUserIdAndTenantId(1L, 100L))
+                .thenReturn(Optional.of(membership(MembershipStatus.ACTIVE, "ADMIN")));
+
+        assertNotNull(resolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER, RoleName.ADMIN));
+    }
+
+    /** The roles come from the membership in *this* tenant — never from the caller's token. */
+    @Test
+    void requireRole_withoutThatRoleInThisTenant_throwsTenantAccessDenied() {
+        when(membershipRepository.findWithRolesByUserIdAndTenantId(1L, 100L))
+                .thenReturn(Optional.of(membership(MembershipStatus.ACTIVE, "VIEWER")));
+
+        TenantAccessDeniedException ex = assertThrows(TenantAccessDeniedException.class,
+                () -> resolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER));
+        assertEquals(Messages.TENANT_ROLE_REQUIRED, ex.getMessage());
+    }
+
+    @Test
+    void requireRole_inactiveMembership_throwsBeforeTheRoleIsEvenConsidered() {
+        when(membershipRepository.findWithRolesByUserIdAndTenantId(1L, 100L))
+                .thenReturn(Optional.of(membership(MembershipStatus.REMOVED, "OWNER")));
+
+        TenantAccessDeniedException ex = assertThrows(TenantAccessDeniedException.class,
+                () -> resolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER));
+        assertEquals(Messages.TENANT_MEMBERSHIP_NOT_ACTIVE, ex.getMessage());
     }
 
     @Test

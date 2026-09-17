@@ -1,0 +1,20 @@
+{
+  "defaults": {
+    "authRequired": true,
+    "throttle": {
+      "requestsPerMinute": 60,
+      "burstSize": 10
+    }
+  },
+  "endpoints": [
+    {
+      "path": "/api/v1/features",
+      "method": "GET",
+      "roles": []
+    },
+    {
+      "path": "/api/v1/features/*",
+      "roles": ["OWNER", "ADMIN"]
+    }
+  ]
+}

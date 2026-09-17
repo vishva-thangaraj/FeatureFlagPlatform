@@ -33,6 +33,13 @@ import java.util.Set;
  * resolved tenant and its roles are written back into the principal, every controller and service keeps
  * reading {@code userDetails.getTenantId()} and is correctly scoped without changes.
  *
+ * <p>{@code /api/v1/tenants/{tenantId}} names its tenant in the path instead, so for those requests the
+ * path segment is the tenant and the header is ignored. This filter used to skip them entirely, which left
+ * {@code RoleAuthorizationFilter} checking the {@code OWNER} requirement on PUT and DELETE against the
+ * roles baked into the caller's JWT — the roles in their <em>own default</em> tenant. Anyone who created a
+ * tenant therefore carried {@code OWNER} everywhere and could rename or delete any tenant on the platform.
+ * Resolving the path tenant here makes those declarative role rules mean what they say.
+ *
  * <p>Runs after {@code JwtAuthenticationFilter} (which supplies the principal) and before
  * {@code RoleAuthorizationFilter}, so role checks apply to the <em>target</em> tenant's roles.
  */
@@ -50,11 +57,19 @@ public class TenantContextFilter extends OncePerRequestFilter {
             "/api/v1/auth/switch-tenant",
             "/api/v1/tenants");
 
-    /**
-     * {@code /api/v1/tenants/{tenantId}} takes its tenant from the path, not from this header, so it is
-     * authorized in TenantServiceImpl against the path tenant instead.
-     */
+    /** Everything under it names its tenant in the first path segment rather than in the header. */
     private static final String TENANT_PATH_PREFIX = "/api/v1/tenants/";
+
+    /**
+     * Token-addressed invitation endpoints ({@code /{inviteToken}}, {@code .../accept},
+     * {@code .../decline}). The invitation itself names the tenant, so the caller has no tenant context
+     * yet — an invitee who belongs to no tenant at all, or who is being invited to their second one,
+     * would otherwise be refused here before the controller ever runs.
+     *
+     * <p>Deliberately a prefix and not the collection path: {@code POST /api/v1/invitations} <em>creates</em>
+     * an invitation in the caller's acting tenant and must stay scoped.
+     */
+    private static final String INVITATION_TOKEN_PATH_PREFIX = "/api/v1/invitations/";
 
     private final TenantMembershipResolver tenantMembershipResolver;
     private final FilterErrorWriter errorWriter;
@@ -67,8 +82,30 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getServletPath();
-        return TENANT_LESS_PATHS.contains(path) || path.startsWith(TENANT_PATH_PREFIX);
+        String path = requestPath(request);
+        return TENANT_LESS_PATHS.contains(path) || path.startsWith(INVITATION_TOKEN_PATH_PREFIX);
+    }
+
+    /**
+     * The request path this filter matches its rules against, context path stripped.
+     *
+     * <p>Deliberately not {@code getServletPath()}. That returns the full path only because the dispatcher
+     * servlet is mapped at {@code /}, and it is empty whenever the request was not routed through a servlet
+     * mapping — notably under MockMvc, where {@code getRequestURI()} carries the path instead. Matching on
+     * the servlet path therefore silently matched nothing in every integration test, so the tenant-less and
+     * path-tenant rules below looked covered while never actually running. Deriving the path from the
+     * request URI gives the same answer in production and keeps the tests honest.
+     */
+    private String requestPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        if (uri == null || uri.isEmpty()) {
+            return request.getServletPath();
+        }
+        String contextPath = request.getContextPath();
+        if (contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath)) {
+            uri = uri.substring(contextPath.length());
+        }
+        return uri;
     }
 
     @Override
@@ -84,12 +121,20 @@ public class TenantContextFilter extends OncePerRequestFilter {
             return;
         }
 
+        String pathTenantId = pathTenantId(requestPath(request));
+
         Long requestedTenantId;
         try {
-            requestedTenantId = resolveRequestedTenantId(request, principal);
+            // Not a ternary: mixing Long.parseLong with a nullable Long unboxes the null branch.
+            if (pathTenantId != null) {
+                requestedTenantId = Long.valueOf(pathTenantId);
+            } else {
+                requestedTenantId = resolveRequestedTenantId(request, principal);
+            }
         } catch (NumberFormatException e) {
-            errorWriter.write(response, HttpStatus.BAD_REQUEST,
-                    I18N.getMessage(Messages.TENANT_HEADER_INVALID, TENANT_HEADER));
+            errorWriter.write(response, HttpStatus.BAD_REQUEST, pathTenantId != null
+                    ? I18N.getMessage(Messages.TENANT_PATH_INVALID)
+                    : I18N.getMessage(Messages.TENANT_HEADER_INVALID, TENANT_HEADER));
             return;
         }
 
@@ -116,6 +161,20 @@ public class TenantContextFilter extends OncePerRequestFilter {
         SecurityContextHolder.getContext().setAuthentication(scopedAuthentication);
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * The tenant named in {@code /api/v1/tenants/{tenantId}} (and anything nested under it), or null when
+     * the path carries no tenant of its own and the header/token decides instead.
+     */
+    private String pathTenantId(String path) {
+        if (!path.startsWith(TENANT_PATH_PREFIX)) {
+            return null;
+        }
+        String remainder = path.substring(TENANT_PATH_PREFIX.length());
+        int nextSlash = remainder.indexOf('/');
+        String segment = nextSlash < 0 ? remainder : remainder.substring(0, nextSlash);
+        return segment.isBlank() ? null : segment;
     }
 
     /** Header wins; the token's claim is the caller's default. Null means neither supplied one. */

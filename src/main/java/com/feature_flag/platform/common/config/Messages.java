@@ -24,6 +24,8 @@ public final class Messages {
     public static final String TENANT_MEMBERSHIP_NO_LONGER_EXISTS = "tenant.membership.no.longer.exists";
     public static final String TENANT_MEMBERSHIP_NO_LONGER_ACTIVE = "tenant.membership.no.longer.active";
     public static final String TENANT_HEADER_INVALID = "tenant.header.invalid";
+    public static final String TENANT_PATH_INVALID = "tenant.path.invalid";
+    public static final String TENANT_ROLE_REQUIRED = "tenant.role.required";
     public static final String RESOURCE_TENANT_NOT_FOUND = "resource.tenant.not.found";
 
     // User Invitation
@@ -31,6 +33,11 @@ public final class Messages {
     public static final String INVITATION_TOKEN_INVALID = "invitation.token.invalid";
     public static final String INVITATION_ALREADY_PROCESSED = "invitation.already.processed";
     public static final String INVITATION_EXPIRED = "invitation.expired";
+    public static final String INVITATION_ACCEPTED = "invitation.accepted";
+    public static final String INVITATION_AUTHENTICATION_REQUIRED = "invitation.authentication.required";
+    public static final String INVITATION_NOT_FOR_CALLER = "invitation.not.for.caller";
+    public static final String INVITATION_REGISTRATION_REQUIRED = "invitation.registration.required";
+    public static final String INVITATION_REGISTRATION_EMAIL_MISMATCH = "invitation.registration.email.mismatch";
 
     // Resource
     public static final String RESOURCE_USER_NOT_FOUND = "resource.user.not.found";
