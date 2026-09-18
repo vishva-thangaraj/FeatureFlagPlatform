@@ -1,6 +1,13 @@
 services:
   app:
+    # Remote debugging, dev only. This used to live in docker-compose.yml, which meant every deployment
+    # built from the base file published a JDWP port — an unauthenticated, fully privileged entry point
+    # into the JVM (read and write any memory, load classes, invoke any method). It belongs in the
+    # override you opt into locally, never in the file production inherits.
+    ports:
+      - "5005:5005"
     environment:
+      JAVA_TOOL_OPTIONS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/featureflag
     depends_on:
       mailpit:

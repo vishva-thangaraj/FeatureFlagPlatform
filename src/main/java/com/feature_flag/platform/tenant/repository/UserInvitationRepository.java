@@ -3,6 +3,9 @@ package com.feature_flag.platform.tenant.repository;
 import com.feature_flag.platform.tenant.entity.UserInvitation;
 import com.feature_flag.platform.tenant.enums.InvitationStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -31,4 +34,12 @@ public interface UserInvitationRepository extends JpaRepository<UserInvitation, 
                                                                    InvitationStatus status);
 
     Optional<UserInvitation> findByTokenHash(String tokenHash);
+    /**
+     * Tenant-deletion cascade. Invitations are leaves — nothing points at them — so they can go at any
+     * point before the tenant row itself. Pending invitations die with the tenant by design: the token
+     * they carry would otherwise grant membership of a tenant that no longer exists.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("delete from UserInvitation i where i.tenant.id = :tenantId")
+    int deleteAllByTenantId(@Param("tenantId") Long tenantId);
 }

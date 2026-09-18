@@ -4,6 +4,9 @@ import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -35,4 +38,25 @@ public interface MembershipRepository extends JpaRepository<Membership, Long> {
     Optional<Membership> findWithRolesByUserIdAndTenantId(Long userId, Long tenantId);
 
     boolean existsByUserIdAndTenantId(Long userId, Long tenantId);
+
+    /**
+     * Tenant-deletion cascade, step one of two.
+     *
+     * <p>{@code Membership.roles} is an owning {@code @ManyToMany}, so the {@code membership_roles} join
+     * rows are Hibernate's to clean up — and a <em>bulk</em> delete of the memberships bypasses the
+     * persistence context entirely and would leave them behind, pointing at membership ids that no longer
+     * exist. Hibernate has no HQL for a join table, so this one statement is native. It must run before
+     * {@link #deleteAllByTenantId(Long)}.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "delete from membership_roles where membership_id in "
+            + "(select id from memberships where tenant_id = :tenantId)", nativeQuery = true)
+    int deleteMembershipRolesByTenantId(@Param("tenantId") Long tenantId);
+
+    /**
+     * Tenant-deletion cascade, step two: the membership rows themselves, once nothing references them.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("delete from Membership m where m.tenant.id = :tenantId")
+    int deleteAllByTenantId(@Param("tenantId") Long tenantId);
 }

@@ -46,4 +46,32 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("UPDATE RefreshToken rt SET rt.revoked = true WHERE rt.id = :tokenId AND rt.revoked = false")
     int revokeByIdInNewTransaction(@Param("tokenId") Long tokenId);
+
+    /**
+     * Breaks the {@code replaced_by} self-reference before a tenant's refresh tokens are deleted.
+     *
+     * <p>Rotation leaves every superseded token pointing at its replacement. A single multi-row delete
+     * checks that self-FK row by row, so whether it survives depends on the order the database happens to
+     * remove them in; nulling the pointers first makes the delete order-independent. It also releases any
+     * token outside the tenant that points into it.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update RefreshToken rt set rt.replacedBy = null
+            where rt.replacedBy.id in (select r.id from RefreshToken r where r.tenant.id = :tenantId)
+            """)
+    int detachReplacementChainsByTenantId(@Param("tenantId") Long tenantId);
+
+    /**
+     * Tenant-deletion cascade. {@code refresh_tokens.tenant_id} is a foreign key to {@code tenants} and
+     * every login and rotation writes one, so a tenant whose owner has ever signed in cannot be deleted
+     * until these rows are gone.
+     *
+     * <p>Deleting rather than detaching is deliberate: a refresh token names the tenant its access tokens
+     * will be minted for, so once that tenant is gone the credential can only ever fail. Leaving it alive
+     * with a dangling tenant would keep a session that resolves to nothing.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("delete from RefreshToken rt where rt.tenant.id = :tenantId")
+    int deleteAllByTenantId(@Param("tenantId") Long tenantId);
 }
