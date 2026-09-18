@@ -2,17 +2,23 @@
   "type": "record",
   "name": "FeatureChangeEvent",
   "namespace": "com.feature_flag.platform.feature.events",
+  "doc": "Emitted after a feature-flag write commits. See docs/feature-events.md for the contract.",
+  "aliases": ["com.feature_flag.platform.events.FeatureChangeEvent"],
   "fields": [
     { "name": "eventId", "type": "string" },
     { "name": "changeType", "type": { "type": "enum", "name": "ChangeType",
+      "aliases": ["com.feature_flag.platform.events.ChangeType"],
+      "doc": "UNKNOWN is the reader default: a consumer built against this schema decodes a symbol added later as UNKNOWN instead of failing.",
       "symbols": ["STATUS_CHANGED","RULE_ADDED","RULE_UPDATED","RULE_DELETED",
-        "RULES_REPLACED","OVERRIDE_SET","OVERRIDE_DELETED"] }},
+        "RULES_REPLACED","OVERRIDE_SET","OVERRIDE_DELETED","UNKNOWN"],
+      "default": "UNKNOWN" }},
     { "name": "tenantId",      "type": "string" },
     { "name": "featureKey",    "type": "string" },
     { "name": "envName",       "type": "string" },
     { "name": "occurredAt", "type": {"type":"long","logicalType":"timestamp-millis"} },
     { "name": "actorUserId", "type": ["null", "string"], "default": null },
     { "name": "details", "type": { "type": "map", "values": "string" },
+      "doc": "Type-specific identifiers ONLY. Never customer-supplied values (targeting values, attribute names) — this topic is shared across tenants and retained.",
       "default": {}
     }
   ]
