@@ -13,9 +13,7 @@ services:
     build: .
     ports:
       - "8080:8080"
-      - "5005:5005"
     environment:
-      JAVA_TOOL_OPTIONS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       SPRING_PROFILES_ACTIVE: docker
       SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
