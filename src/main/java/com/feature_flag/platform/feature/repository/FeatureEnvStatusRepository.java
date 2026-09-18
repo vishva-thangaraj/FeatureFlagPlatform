@@ -16,14 +16,16 @@ public interface FeatureEnvStatusRepository extends JpaRepository<FeatureEnvStat
 
     List<FeatureEnvStatus> findAllByFeatureId(Long featureId);
 
+    /** Every status row in one environment — the rows that must go before the env row itself can. */
+    List<FeatureEnvStatus> findAllByEnvId(Long envId);
+
     void deleteByFeatureIdAndEnvId(Long featureId, Long envId);
 
     // ---- Client config lookups, keyed by feature key + env name within a tenant (D10) ----
-
-    Optional<FeatureEnvStatus> findByFeature_KeyAndFeature_Tenant_IdAndEnv_Name(
-            String featureKey, Long tenantId, String envName);
-
-    List<FeatureEnvStatus> findAllByFeature_Tenant_IdAndEnv_Name(Long tenantId, String envName);
+    //
+    // Both of these JOIN FETCH feature and env on purpose. The config payload names the feature key
+    // and the env name for every row, so a derived query here costs one extra SELECT per flag the
+    // moment those LAZY associations are dereferenced.
 
     @Query("""
     SELECT fes FROM FeatureEnvStatus fes
@@ -36,5 +38,16 @@ public interface FeatureEnvStatusRepository extends JpaRepository<FeatureEnvStat
     """)
     Optional<FeatureEnvStatus> findConfig(@Param("featureKey") String featureKey,
                                           @Param("tenantId") Long tenantId,
+                                          @Param("envName") String envName);
+
+    @Query("""
+    SELECT fes FROM FeatureEnvStatus fes
+    JOIN FETCH fes.feature f
+    JOIN FETCH fes.env e
+    WHERE f.tenant.id = :tenantId
+      AND e.name = :envName
+      AND e.tenant.id = :tenantId
+    """)
+    List<FeatureEnvStatus> findAllConfigs(@Param("tenantId") Long tenantId,
                                           @Param("envName") String envName);
 }

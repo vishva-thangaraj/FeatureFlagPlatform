@@ -31,6 +31,11 @@ public class FeatureEnvStatus extends BaseEntity {
     @Column(nullable = false)
     private boolean enabled;
 
+    /**
+     * Percentage of the user base the flag is on for. {@code 0} is "nobody" in the SDK evaluation
+     * contract, not "unset" — so a row created for a flag someone just switched on is built with
+     * {@code FeatureService.FULL_ROLLOUT} rather than this field default.
+     */
     @Column(name = "rollout_percentage", nullable = false)
     @Builder.Default
     private int rolloutPercentage = 0;
