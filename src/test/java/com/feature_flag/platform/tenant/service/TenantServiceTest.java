@@ -11,11 +11,15 @@ import com.feature_flag.platform.common.exception.ResourceNotFoundException;
 import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
 import com.feature_flag.platform.common.security.TenantMembershipResolver;
 import com.feature_flag.platform.common.security.TenantUserDetails;
+import com.feature_flag.platform.feature.repository.EnvRepository;
+import com.feature_flag.platform.feature.repository.FeatureEnvStatusRepository;
+import com.feature_flag.platform.feature.repository.FeatureRepository;
+import com.feature_flag.platform.feature.repository.FeatureRuleRepository;
+import com.feature_flag.platform.feature.repository.FeatureUserOverrideRepository;
 import com.feature_flag.platform.tenant.dto.TenantCreationRequest;
 import com.feature_flag.platform.tenant.dto.TenantList;
 import com.feature_flag.platform.tenant.dto.TenantResponse;
 import com.feature_flag.platform.tenant.dto.UpdateTenantRequest;
-import com.feature_flag.platform.tenant.entity.ApiKey;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
@@ -23,12 +27,15 @@ import com.feature_flag.platform.tenant.enums.TenantPlan;
 import com.feature_flag.platform.tenant.mapper.TenantMapper;
 import com.feature_flag.platform.tenant.repository.ApiKeyRepository;
 import com.feature_flag.platform.tenant.repository.MembershipRepository;
+import com.feature_flag.platform.tenant.repository.TenantRefreshTokenRepository;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
+import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
 import com.feature_flag.platform.util.TestEntityUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -52,6 +59,13 @@ class TenantServiceTest {
     @Mock private MembershipRepository membershipRepository;
     @Mock private RoleRepository roleRepository;
     @Mock private ApiKeyRepository apiKeyRepository;
+    @Mock private UserInvitationRepository userInvitationRepository;
+    @Mock private TenantRefreshTokenRepository tenantRefreshTokenRepository;
+    @Mock private FeatureRuleRepository featureRuleRepository;
+    @Mock private FeatureUserOverrideRepository featureUserOverrideRepository;
+    @Mock private FeatureEnvStatusRepository featureEnvStatusRepository;
+    @Mock private FeatureRepository featureRepository;
+    @Mock private EnvRepository envRepository;
     @Mock private TenantMembershipResolver tenantMembershipResolver;
 
     private TenantMapper tenantMapper = new TenantMapper();
@@ -66,7 +80,9 @@ class TenantServiceTest {
     @BeforeEach
     void setUp() {
         tenantService = new TenantServiceImpl(tenantRepository, userRepository, membershipRepository,
-                roleRepository, apiKeyRepository, tenantMembershipResolver, tenantMapper);
+                roleRepository, apiKeyRepository, userInvitationRepository, tenantRefreshTokenRepository,
+                featureRuleRepository, featureUserOverrideRepository, featureEnvStatusRepository,
+                featureRepository, envRepository, tenantMembershipResolver, tenantMapper);
 
         i18nMock = mockStatic(I18N.class);
         i18nMock.when(() -> I18N.getMessage(anyString())).thenAnswer(inv -> inv.getArgument(0));
@@ -207,21 +223,74 @@ class TenantServiceTest {
         verify(tenantRepository, never()).save(any(Tenant.class));
     }
 
+    /**
+     * The cascade used to stop at memberships and API keys, so any tenant that had ever created a feature
+     * or invited anyone died on a foreign-key constraint. Every tenant-owned table is now cleaned up.
+     */
     @Test
-    void deleteTenant_asOwnerOfThatTenant_removesTheTenantAndItsChildren() {
-        Membership membership = activeMembership(ownerRole);
-        ApiKey apiKey = TestEntityUtil.withId(ApiKey.builder()
-                .tenant(testTenant).name("ci").keyHash("hash").build(), 300L);
+    void deleteTenant_asOwnerOfThatTenant_removesEveryTenantOwnedTable() {
         when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
-                .thenReturn(membership);
+                .thenReturn(activeMembership(ownerRole));
         when(tenantRepository.findById(100L)).thenReturn(Optional.of(testTenant));
-        when(apiKeyRepository.findByTenantId(100L)).thenReturn(List.of(apiKey));
-        when(membershipRepository.findByTenantId(100L)).thenReturn(List.of(membership));
 
         tenantService.deleteTenant(100L, userDetails);
 
-        verify(apiKeyRepository).deleteAll(List.of(apiKey));
-        verify(membershipRepository).deleteAll(List.of(membership));
+        verify(featureRuleRepository).deleteAllByTenantId(100L);
+        verify(featureUserOverrideRepository).deleteAllByTenantId(100L);
+        verify(featureEnvStatusRepository).deleteAllByTenantId(100L);
+        verify(featureRepository).deleteAllByTenantId(100L);
+        verify(envRepository).deleteAllByTenantId(100L);
+        verify(userInvitationRepository).deleteAllByTenantId(100L);
+        verify(apiKeyRepository).deleteAllByTenantId(100L);
+        verify(tenantRefreshTokenRepository).detachReplacementChainsByTenantId(100L);
+        verify(tenantRefreshTokenRepository).deleteAllByTenantId(100L);
+        verify(membershipRepository).deleteMembershipRolesByTenantId(100L);
+        verify(membershipRepository).deleteAllByTenantId(100L);
+        verify(tenantRepository).delete(testTenant);
+    }
+
+    /**
+     * Ordering is the whole ballgame with foreign keys: every child has to go before the row it points at.
+     * Pinned here because the bulk statements give the database no chance to work it out for itself.
+     */
+    @Test
+    void deleteTenant_deletesChildrenBeforeTheRowsTheyPointAt() {
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
+                .thenReturn(activeMembership(ownerRole));
+        when(tenantRepository.findById(100L)).thenReturn(Optional.of(testTenant));
+
+        tenantService.deleteTenant(100L, userDetails);
+
+        InOrder inOrder = inOrder(featureRuleRepository, featureUserOverrideRepository,
+                featureEnvStatusRepository, featureRepository, envRepository,
+                tenantRefreshTokenRepository, membershipRepository, tenantRepository);
+        // Rules and overrides hang off feature_env_status...
+        inOrder.verify(featureRuleRepository).deleteAllByTenantId(100L);
+        inOrder.verify(featureUserOverrideRepository).deleteAllByTenantId(100L);
+        // ...which points at both feature and env...
+        inOrder.verify(featureEnvStatusRepository).deleteAllByTenantId(100L);
+        inOrder.verify(featureRepository).deleteAllByTenantId(100L);
+        inOrder.verify(envRepository).deleteAllByTenantId(100L);
+        // ...refresh tokens point at each other, so the chain is broken before the delete...
+        inOrder.verify(tenantRefreshTokenRepository).detachReplacementChainsByTenantId(100L);
+        inOrder.verify(tenantRefreshTokenRepository).deleteAllByTenantId(100L);
+        // ...membership_roles points at memberships, which a bulk delete would not clean up...
+        inOrder.verify(membershipRepository).deleteMembershipRolesByTenantId(100L);
+        inOrder.verify(membershipRepository).deleteAllByTenantId(100L);
+        // ...and the tenant row is last, once nothing references it.
+        inOrder.verify(tenantRepository).delete(testTenant);
+    }
+
+    /** Nothing to delete is not an error: a brand-new tenant has no children at all. */
+    @Test
+    void deleteTenant_withNoChildRows_stillDeletesTheTenant() {
+        when(tenantMembershipResolver.requireActiveMembershipWithAnyRole(1L, 100L, RoleName.OWNER))
+                .thenReturn(activeMembership(ownerRole));
+        when(tenantRepository.findById(100L)).thenReturn(Optional.of(testTenant));
+        // All the bulk deletes return 0 by Mockito's default.
+
+        tenantService.deleteTenant(100L, userDetails);
+
         verify(tenantRepository).delete(testTenant);
     }
 
@@ -238,7 +307,10 @@ class TenantServiceTest {
 
         verify(tenantRepository, never()).delete(any(Tenant.class));
         verify(tenantRepository, never()).findById(anyLong());
-        verifyNoInteractions(apiKeyRepository);
+        // Not one row of the cascade may have been touched before the refusal.
+        verifyNoInteractions(apiKeyRepository, userInvitationRepository, tenantRefreshTokenRepository,
+                membershipRepository, featureRuleRepository, featureUserOverrideRepository,
+                featureEnvStatusRepository, featureRepository, envRepository);
     }
 
     /** Authorization runs before the lookup, so a missing tenant is a 403, not a 404 existence oracle. */
@@ -259,5 +331,10 @@ class TenantServiceTest {
         when(tenantRepository.findById(100L)).thenReturn(Optional.empty());
 
         assertThrows(ResourceNotFoundException.class, () -> tenantService.deleteTenant(100L, userDetails));
+
+        // The 404 is decided before the cascade starts, so a vanished tenant deletes nothing either.
+        verifyNoInteractions(featureRuleRepository, featureUserOverrideRepository,
+                featureEnvStatusRepository, featureRepository, envRepository, apiKeyRepository,
+                userInvitationRepository, tenantRefreshTokenRepository, membershipRepository);
     }
 }
