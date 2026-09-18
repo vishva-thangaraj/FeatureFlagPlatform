@@ -31,14 +31,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class FeatureService {
+
+    /**
+     * Rollout a fresh status row starts at. {@code 0} means "off for everyone" in the SDK evaluation
+     * contract, which is not what "enable this flag" can be allowed to mean.
+     */
+    static final int FULL_ROLLOUT = 100;
+
     private final FeatureRepository featureRepository;
     private final TenantRepository tenantRepository;
     private final EnvRepository envRepository;
@@ -87,12 +95,15 @@ public class FeatureService {
                 .description(request.description())
                 .tenant(tenant)
                 .build();
-        feature.setCreatedAt(LocalDateTime.now().toInstant(java.time.ZoneOffset.UTC));
+        // createdAt is not set here on purpose: BaseEntity.createdAt is @CreationTimestamp. The line
+        // that used to stand here read LocalDateTime.now().toInstant(ZoneOffset.UTC), which relabels
+        // the server's local wall-clock as UTC — five and a half hours adrift on an IST host.
 
         featureRepository.save(feature);
         return FeatureMapper.toFeatureResponse(feature);
     }
 
+    @Transactional(readOnly = true)
     public FeatureListResponse getFeaturesList(Long tenantId) {
         List<Feature> features = featureRepository.findAllByTenantId(tenantId);
         List<FeatureResponse> featureResponses = features.stream()
@@ -101,15 +112,24 @@ public class FeatureService {
         return new FeatureListResponse(featureResponses);
     }
 
+    @Transactional(readOnly = true)
     public FeatureResponse getFeature(Long featureId, Long tenantId) {
         Feature feature = findByIdAndTenant(featureId, tenantId);
         return FeatureMapper.toFeatureResponse(feature);
     }
 
+    /**
+     * Partial update: an absent (null) field is left alone, matching {@code ENVService.updateEnv}.
+     * This used to assign {@code request.description()} unconditionally, so {@code PUT {}} — the
+     * shape a client sends when it means "change nothing else" — erased the description. To clear it
+     * deliberately, send {@code {"description": ""}}.
+     */
     @Transactional
     public FeatureResponse updateFeature(Long featureId, UpdateFeatureRequest request, Long tenantId) {
         Feature feature = findByIdAndTenant(featureId, tenantId);
-        feature.setDescription(request.description());
+        if (request.description() != null) {
+            feature.setDescription(request.description());
+        }
         featureRepository.save(feature);
         return FeatureMapper.toFeatureResponse(feature);
     }
@@ -124,6 +144,11 @@ public class FeatureService {
             featureRuleRepository.deleteAllByFeatureEnvStatusId(status.getId());
             featureUserOverrideRepository.deleteAllByFeatureEnvStatusId(status.getId());
         }
+        // Whole rows are about to disappear, and the bulk config payload's lastModified is a maximum
+        // over the rows that remain — deleting anything but the newest flag would leave that maximum
+        // untouched, so every polling SDK would keep getting 304 and keep serving the deleted flag.
+        // The environment carries the timestamp that no row deletion can hide.
+        touchEnvironments(statuses);
         featureEnvStatusRepository.deleteAll(statuses);
         featureRepository.delete(feature);
     }
@@ -134,9 +159,19 @@ public class FeatureService {
                 .orElseThrow(() -> new ResourceNotFoundException(I18N.getMessage(Messages.RESOURCE_FEATURE_NOT_FOUND)));
     }
 
+    /**
+     * Enable or disable a flag in one environment.
+     *
+     * <p>{@code rolloutPercentage} is optional. Omitting it on an <em>existing</em> row leaves the
+     * stored percentage alone — a kill-switch toggle must not silently discard a deliberate 25%
+     * rollout. Omitting it on the <em>first</em> enable used to leave the column at its 0 default,
+     * and the SDK contract reads {@code rolloutPercentage <= 0} as off-for-everyone: the dashboard
+     * showed the flag on while every SDK returned false, with nothing anywhere saying why. A brand
+     * new row therefore defaults to fully rolled out; a percentage is something you opt into.
+     */
     @Transactional
     public void setFeatureStatus(Long featureId, @Valid FeatureEnableRequest request, Long tenantId) {
-        Feature feature =findByIdAndTenant(featureId, tenantId);
+        Feature feature = findByIdAndTenant(featureId, tenantId);
 
         Long envID = request.envId();
 
@@ -148,6 +183,7 @@ public class FeatureService {
                 .orElseGet(() -> FeatureEnvStatus.builder()
                         .feature(feature)
                         .env(env)
+                        .rolloutPercentage(FULL_ROLLOUT)
                         .build());
         featureEnvStatus.setEnabled(request.enabled());
         if (request.rolloutPercentage() != null) {
@@ -172,6 +208,13 @@ public class FeatureService {
 
     // ---------- Feature env status listing ----------
 
+    /**
+     * Read methods here are transactional for a reason: their mappers walk LAZY associations
+     * ({@code status.getEnv().getName()}), and without a transaction the only thing keeping that from
+     * throwing {@code LazyInitializationException} is {@code spring.jpa.open-in-view}, which is unset
+     * and therefore on by default. These would have started failing the day anyone turned it off.
+     */
+    @Transactional(readOnly = true)
     public List<FeatureEnvStatusResponse> listEnvStatuses(Long featureId, Long tenantId) {
         findByIdAndTenant(featureId, tenantId);
         return featureEnvStatusRepository.findAllByFeatureId(featureId)
@@ -182,6 +225,7 @@ public class FeatureService {
 
     // ---------- Feature rules ----------
 
+    @Transactional(readOnly = true)
     public List<RuleResponse> listRules(Long featureId, Long envId, Long tenantId) {
         FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
         return featureRuleRepository.findAllByFeatureEnvStatusIdOrderByPriorityAsc(fes.getId())
@@ -190,7 +234,15 @@ public class FeatureService {
                 .toList();
     }
 
-    public List<String> listAttributes(Long tenantId) {
+    /**
+     * Attribute names already in use, for the rule editor's autocomplete. The result is deliberately
+     * tenant-wide rather than per-feature — suggestions are more useful that way — but the feature id
+     * in the path is still checked, so a typo or another tenant's id answers 404 instead of 200 with
+     * a list that has nothing to do with it.
+     */
+    @Transactional(readOnly = true)
+    public List<String> listAttributes(Long featureId, Long tenantId) {
+        findByIdAndTenant(featureId, tenantId);
         return featureRuleRepository.findDistinctAttributesByTenantId(tenantId);
     }
 
@@ -217,6 +269,7 @@ public class FeatureService {
                 .priority(request.priority())
                 .build();
         rule = featureRuleRepository.save(rule);
+        touch(fes);
 
         FeatureChangeEvent event = FeatureChangeEvent.newBuilder()
                                 .setEventId(UUID.randomUUID().toString())
@@ -265,6 +318,7 @@ public class FeatureService {
         rule.setEnabled(request.enabled());
         rule.setPriority(request.priority());
         FeatureRule saved = featureRuleRepository.save(rule);
+        touch(saved.getFeatureEnvStatus());
 
         publishChange(ChangeType.RULE_UPDATED, saved.getFeatureEnvStatus(), tenantId, Map.of(
                 "ruleId", String.valueOf(saved.getId()),
@@ -294,6 +348,7 @@ public class FeatureService {
                 "enabled", String.valueOf(rule.isEnabled()),
                 "priority", String.valueOf(rule.getPriority())));
         featureRuleRepository.delete(rule);
+        touch(rule.getFeatureEnvStatus());
     }
 
     /** Replace the entire rule set for a feature/env atomically. An empty list clears all rules. */
@@ -318,6 +373,7 @@ public class FeatureService {
                     .build();
             saved.add(featureRuleMapper.toRuleResponse(featureRuleRepository.save(rule)));
         }
+        touch(fes);
 
         // One coarse event for the whole set swap — the WebSocket consumer re-fetches config anyway.
         publishChange(ChangeType.RULES_REPLACED, fes, tenantId, Map.of(
@@ -327,6 +383,7 @@ public class FeatureService {
 
     // ---------- User overrides ----------
 
+    @Transactional(readOnly = true)
     public List<FeatureUserOverrideResponse> listOverrides(Long featureId, Long envId, Long tenantId) {
         FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
         return featureUserOverrideRepository.findAllByFeatureEnvStatusId(fes.getId())
@@ -346,6 +403,7 @@ public class FeatureService {
                         .build());
         override.setEnabled(request.enabled());
         FeatureUserOverride persisted = featureUserOverrideRepository.save(override);
+        touch(fes);
 
         publishChange(ChangeType.OVERRIDE_SET, fes, tenantId, Map.of(
                 "externalUserId", persisted.getExternalUserId(),
@@ -365,9 +423,42 @@ public class FeatureService {
         publishChange(ChangeType.OVERRIDE_DELETED, fes, tenantId, Map.of(
                 "externalUserId", override.getExternalUserId()));
         featureUserOverrideRepository.delete(override);
+        touch(fes);
     }
 
     // ---------- Helpers ----------
+
+    /**
+     * Stamp the status row so a change to one of its children is visible to a conditional request.
+     *
+     * <p>A flag's {@code lastModified} is the maximum {@code updatedAt} over the status row and the
+     * rule/override rows that still exist, and the ETag is built from it. Adding or editing a child
+     * raises that maximum by itself; <em>deleting</em> one cannot. Given rules at T5 and T9 the ETag
+     * quotes T9, and deleting the T5 rule leaves the maximum at T9 — same ETag, so the next poll with
+     * {@code If-None-Match} gets 304 and the SDK goes on enforcing a rule that no longer exists, for
+     * as long as nothing else in that flag changes. Stamping the parent gives the deletion somewhere
+     * to land.
+     *
+     * <p>Assigning {@code updatedAt} makes the entity dirty; Hibernate's {@code @UpdateTimestamp} then
+     * writes the flush-time value over it. The assignment is what schedules the UPDATE.
+     */
+    private void touch(FeatureEnvStatus fes) {
+        fes.setUpdatedAt(Instant.now());
+        featureEnvStatusRepository.save(fes);
+    }
+
+    /** Same idea one level up: the env timestamp survives the deletion of every row beneath it. */
+    private void touchEnvironments(List<FeatureEnvStatus> statuses) {
+        Set<Long> seen = new HashSet<>();
+        for (FeatureEnvStatus status : statuses) {
+            Env env = status.getEnv();
+            if (env == null || !seen.add(env.getId())) {
+                continue;
+            }
+            env.setUpdatedAt(Instant.now());
+            envRepository.save(env);
+        }
+    }
 
     private FeatureEnvStatus findFeatureEnvStatus(Long featureId, Long envId, Long tenantId) {
         findByIdAndTenant(featureId, tenantId);
