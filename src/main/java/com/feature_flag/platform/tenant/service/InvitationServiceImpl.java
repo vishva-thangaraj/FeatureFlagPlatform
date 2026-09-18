@@ -11,6 +11,7 @@ import com.feature_flag.platform.auth.service.AuthService;
 import com.feature_flag.platform.auth.service.TokenService;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
+import com.feature_flag.platform.common.exception.ConflictException;
 import com.feature_flag.platform.common.exception.ForbiddenException;
 import com.feature_flag.platform.common.exception.InvalidTokenException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
@@ -155,7 +156,7 @@ public class InvitationServiceImpl implements InvitationService {
 
         UserInvitation existingInvitation = userInvitationRepository.findByEmailAndTenantId(email, tenantId);
         if (existingInvitation != null) {
-            throw new IllegalStateException(I18N.getMessage(Messages.USER_INVITATION_ALREADY_EXISTS, email));
+            throw new ConflictException(I18N.getMessage(Messages.USER_INVITATION_ALREADY_EXISTS, email));
         }
 
         roleRepository.findByName(role)
@@ -215,7 +216,7 @@ public class InvitationServiceImpl implements InvitationService {
                         I18N.getMessage(Messages.INVITATION_TOKEN_INVALID)));
 
         if (invitation.getStatus() != InvitationStatus.PENDING) {
-            throw new IllegalStateException(
+            throw new ConflictException(
                     I18N.getMessage(Messages.INVITATION_ALREADY_PROCESSED));
         }
 
@@ -231,7 +232,7 @@ public class InvitationServiceImpl implements InvitationService {
                         I18N.getMessage(Messages.INVITATION_TOKEN_INVALID)));
 
         if (invitation.getStatus() != InvitationStatus.PENDING) {
-            throw new IllegalStateException(
+            throw new ConflictException(
                     I18N.getMessage(Messages.INVITATION_ALREADY_PROCESSED));
         }
 
