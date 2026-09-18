@@ -32,7 +32,9 @@ public class RoleAuthorizationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        String path = request.getServletPath();
+        // RequestPaths, never getServletPath(): the latter is empty outside a servlet mapping, which made
+        // every rule below silently match nothing under MockMvc.
+        String path = RequestPaths.of(request);
         String method = request.getMethod();
 
         Optional<EndpointSecurityRule> ruleOpt = configLoader.getRule(path, method);
