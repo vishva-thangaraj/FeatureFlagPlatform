@@ -226,16 +226,10 @@ public class FeatureService {
                                 .setTenantId(String.valueOf(tenantId))
                                 .setActorUserId(auditAware.getCurrentAuditor().map(Object::toString).orElse(null))
                                 .setOccurredAt(Instant.now())
-                                .setDetails(Map.of(
-                                        "ruleId", String.valueOf(rule.getId()),
-                                        "attribute", rule.getAttribute(),
-                                        "operator", rule.getOperator().name(),
-                                        "valueType", rule.getValueType().name(),
-                                        "valueJson", rule.getValueJson(),
-                                        "caseSensitive", String.valueOf(rule.isCaseSensitive()),
-                                        "negated", String.valueOf(rule.isNegated()),
-                                        "enabled", String.valueOf(rule.isEnabled()),
-                                        "priority", String.valueOf(rule.getPriority())))
+                                // Identifier only — see the privacy note in docs/feature-events.md:
+                                // attribute names and valueJson are customer-supplied targeting data
+                                // (often end-user emails) and must not reach this shared, retained topic.
+                                .setDetails(Map.of("ruleId", String.valueOf(rule.getId())))
                                 .build();
         eventPublisher.publishEvent(new FeatureChanged(event));
         return featureRuleMapper.toRuleResponse(rule);
@@ -266,16 +260,9 @@ public class FeatureService {
         rule.setPriority(request.priority());
         FeatureRule saved = featureRuleRepository.save(rule);
 
+        // Identifier only — no customer-supplied targeting data on the shared topic.
         publishChange(ChangeType.RULE_UPDATED, saved.getFeatureEnvStatus(), tenantId, Map.of(
-                "ruleId", String.valueOf(saved.getId()),
-                "attribute", saved.getAttribute(),
-                "operator", saved.getOperator().name(),
-                "valueType", saved.getValueType().name(),
-                "valueJson", saved.getValueJson(),
-                "caseSensitive", String.valueOf(saved.isCaseSensitive()),
-                "negated", String.valueOf(saved.isNegated()),
-                "enabled", String.valueOf(saved.isEnabled()),
-                "priority", String.valueOf(saved.getPriority())));
+                "ruleId", String.valueOf(saved.getId())));
         return featureRuleMapper.toRuleResponse(saved);
     }
 
@@ -283,16 +270,9 @@ public class FeatureService {
     public void deleteRule(Long featureId, Long ruleId, Long tenantId) {
         FeatureRule rule = findRuleForTenant(featureId, ruleId, tenantId);
 
+        // Identifier only — no customer-supplied targeting data on the shared topic.
         publishChange(ChangeType.RULE_DELETED, rule.getFeatureEnvStatus(), tenantId, Map.of(
-                "ruleId", String.valueOf(rule.getId()),
-                "attribute", rule.getAttribute(),
-                "operator", rule.getOperator().name(),
-                "valueType", rule.getValueType().name(),
-                "valueJson", rule.getValueJson(),
-                "caseSensitive", String.valueOf(rule.isCaseSensitive()),
-                "negated", String.valueOf(rule.isNegated()),
-                "enabled", String.valueOf(rule.isEnabled()),
-                "priority", String.valueOf(rule.getPriority())));
+                "ruleId", String.valueOf(rule.getId())));
         featureRuleRepository.delete(rule);
     }
 

@@ -41,6 +41,21 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
 
+  # Provisions feature.flag.changes.v1 with the shape docs/feature-events.md specifies.
+  # Without this the broker auto-creates it on first publish with ONE partition, which
+  # silently throws away the per-flag ordering headroom the 6-partition design relies on.
+  # Runs once and exits; re-running is a no-op thanks to --if-not-exists.
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.1
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until kafka-topics --bootstrap-server kafka:29092 --list >/dev/null 2>&1; do sleep 2; done
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic feature.flag.changes.v1 --partitions 6 --replication-factor 1 --config cleanup.policy=delete
+        kafka-topics --bootstrap-server kafka:29092 --describe --topic feature.flag.changes.v1
+
   schema-registry:
     image: confluentinc/cp-schema-registry:7.7.1
     ports:
