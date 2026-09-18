@@ -6,9 +6,17 @@ public final class Messages {
     }
 
     // Auth
-    public static final String AUTH_EMAIL_ALREADY_EXISTS = "auth.email.already.exists";
+    /**
+     * Replaces the former {@code auth.email.already.exists}, which interpolated the probed address
+     * into its text. Registration is unauthenticated: its failure message must neither echo the
+     * submitted address nor confirm that an account holds it. Takes no arguments by design — there is
+     * nothing to interpolate and therefore nothing to leak.
+     */
+    public static final String AUTH_REGISTRATION_CONFLICT = "auth.registration.conflict";
     public static final String AUTH_INVALID_CREDENTIALS = "auth.invalid.credentials";
     public static final String AUTH_USER_SUSPENDED = "auth.user.suspended";
+    /** Any non-ACTIVE, non-SUSPENDED account status: today that is only INACTIVE. */
+    public static final String AUTH_USER_NOT_ACTIVE = "auth.user.not.active";
     public static final String AUTH_LOGOUT_SUCCESS = "auth.logout.success";
     public static final String UNAUTHORIZED = "auth.user.unauthorized";
 

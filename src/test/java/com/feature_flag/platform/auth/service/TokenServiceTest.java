@@ -15,6 +15,7 @@ import com.feature_flag.platform.common.exception.UserSuspendedException;
 import com.feature_flag.platform.common.security.JwtProperties;
 import com.feature_flag.platform.common.security.JwtTokenProvider;
 import com.feature_flag.platform.common.security.TenantMembershipResolver;
+import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.common.security.TokenHashUtil;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
@@ -31,6 +32,10 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -210,12 +215,29 @@ class TokenServiceTest {
 
     @Nested
     class Logout {
+
+        @AfterEach
+        void clearSecurityContext() {
+            SecurityContextHolder.clearContext();
+        }
+
+        private RefreshToken tokenFor(User owner, String raw, Long id) {
+            return TestEntityUtil.withId(RefreshToken.builder()
+                    .user(owner).tenant(testTenant)
+                    .tokenHash(TokenHashUtil.sha256(raw))
+                    .expiresAt(Instant.now().plusSeconds(3600)).revoked(false).build(), id);
+        }
+
+        private void authenticateAs(Long userId) {
+            TenantUserDetails principal =
+                    new TenantUserDetails(userId, "u" + userId + "@test.com", 100L, java.util.List.of("OWNER"));
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+        }
+
         @Test
         void success_revokesToken() {
-            RefreshToken token = TestEntityUtil.withId(RefreshToken.builder()
-                    .user(testUser).tenant(testTenant)
-                    .tokenHash(TokenHashUtil.sha256("logout-token"))
-                    .expiresAt(Instant.now().plusSeconds(3600)).revoked(false).build(), 400L);
+            RefreshToken token = tokenFor(testUser, "logout-token", 400L);
 
             RefreshRequest request = new RefreshRequest("logout-token");
             String hash = TokenHashUtil.sha256("logout-token");
@@ -234,6 +256,76 @@ class TokenServiceTest {
             when(refreshTokenRepository.findByTokenHash(hash)).thenReturn(Optional.empty());
             tokenService.logout(request);
             verify(refreshTokenRepository, never()).save(any());
+        }
+
+        /**
+         * Logout looked its row up by hash and revoked it, full stop — so whoever presented a token got
+         * to end the session it belonged to, caller identity never consulted. With a principal present
+         * the owner is now checked, and a token belonging to somebody else is left live.
+         */
+        @Test
+        void tokenBelongingToAnotherUser_isRefusedAndLeftLive() {
+            User victim = TestEntityUtil.withId(User.builder()
+                    .email("victim@test.com").firstName("Vic").passwordHash("hash")
+                    .status(UserStatus.ACTIVE).build(), 2L);
+            RefreshToken victimToken = tokenFor(victim, "victim-token", 401L);
+            when(refreshTokenRepository.findByTokenHash(TokenHashUtil.sha256("victim-token")))
+                    .thenReturn(Optional.of(victimToken));
+            authenticateAs(1L);
+
+            assertThrows(InvalidTokenException.class,
+                    () -> tokenService.logout(new RefreshRequest("victim-token")));
+
+            assertFalse(victimToken.isRevoked());
+            verify(refreshTokenRepository, never()).save(any());
+        }
+
+        /** The refusal must not double as an oracle: it is the ordinary invalid-token 401. */
+        @Test
+        void refusalForSomeoneElsesToken_saysNothingAboutWhoOwnsIt() {
+            User victim = TestEntityUtil.withId(User.builder()
+                    .email("victim@test.com").firstName("Vic").passwordHash("hash")
+                    .status(UserStatus.ACTIVE).build(), 2L);
+            when(refreshTokenRepository.findByTokenHash(TokenHashUtil.sha256("victim-token")))
+                    .thenReturn(Optional.of(tokenFor(victim, "victim-token", 402L)));
+            authenticateAs(1L);
+
+            InvalidTokenException thrown = assertThrows(InvalidTokenException.class,
+                    () -> tokenService.logout(new RefreshRequest("victim-token")));
+
+            assertEquals(com.feature_flag.platform.common.config.Messages.TOKEN_INVALID, thrown.getMessage());
+        }
+
+        @Test
+        void ownToken_isStillRevokedWhenTheCallerIsAuthenticated() {
+            RefreshToken token = tokenFor(testUser, "own-token", 403L);
+            when(refreshTokenRepository.findByTokenHash(TokenHashUtil.sha256("own-token")))
+                    .thenReturn(Optional.of(token));
+            authenticateAs(1L);
+
+            tokenService.logout(new RefreshRequest("own-token"));
+
+            assertTrue(token.isRevoked());
+            verify(refreshTokenRepository).save(token);
+        }
+
+        /**
+         * The endpoint is permitAll today and JwtAuthenticationFilter skips it, so real requests arrive
+         * anonymous. An AnonymousAuthenticationToken carries a String principal, not TenantUserDetails,
+         * and must not be mistaken for the token's owner — nor break logout while the endpoint stays
+         * unauthenticated.
+         */
+        @Test
+        void anonymousCaller_isNotMistakenForTheOwnerAndLogoutStillWorks() {
+            RefreshToken token = tokenFor(testUser, "anon-token", 404L);
+            when(refreshTokenRepository.findByTokenHash(TokenHashUtil.sha256("anon-token")))
+                    .thenReturn(Optional.of(token));
+            SecurityContextHolder.getContext().setAuthentication(new AnonymousAuthenticationToken(
+                    "key", "anonymousUser", java.util.List.of(new SimpleGrantedAuthority("ROLE_ANONYMOUS"))));
+
+            tokenService.logout(new RefreshRequest("anon-token"));
+
+            assertTrue(token.isRevoked());
         }
     }
 }
