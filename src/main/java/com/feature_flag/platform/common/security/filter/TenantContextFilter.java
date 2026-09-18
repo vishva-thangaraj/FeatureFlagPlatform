@@ -55,6 +55,12 @@ public class TenantContextFilter extends OncePerRequestFilter {
      */
     private static final Set<String> TENANT_LESS_PATHS = Set.of(
             "/api/v1/auth/switch-tenant",
+            // Ending your own session has nothing to do with which tenant you are acting in, and the
+            // callers who most need it have no tenant context to offer: a user who belongs to no tenant
+            // yet, or whose only membership was just revoked. Scoping it would answer them 403 and leave
+            // them unable to log out at all. (Logout became authenticated so that it could verify you own
+            // the refresh token you present; that must not make it tenant-scoped as a side effect.)
+            "/api/v1/auth/logout",
             "/api/v1/tenants");
 
     /** Everything under it names its tenant in the first path segment rather than in the header. */

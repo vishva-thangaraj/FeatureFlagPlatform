@@ -39,13 +39,29 @@ class JwtAuthenticationFilterTest {
     @ValueSource(strings = {
             "/api/v1/auth/register",
             "/api/v1/auth/login",
-            "/api/v1/auth/refresh",
-            "/api/v1/auth/logout"
+            "/api/v1/auth/refresh"
     })
     void shouldNotFilter_publicPaths(String path) {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setServletPath(path);
         assertTrue(filter.shouldNotFilter(request));
+    }
+
+    /**
+     * Logout must be authenticated. It used to sit in the skip list above, so no principal was ever
+     * established and TokenServiceImpl.logout revoked whichever refresh token it was handed — anyone
+     * holding a leaked token could end another user's session. Its ownership check only bites if this
+     * filter runs, so this pins that it does.
+     */
+    @Test
+    void shouldFilter_logout_soTheOwnershipCheckHasAPrincipal() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setServletPath("/api/v1/auth/logout");
+        assertFalse(filter.shouldNotFilter(request));
+
+        MockHttpServletRequest uriOnly = new MockHttpServletRequest();
+        uriOnly.setRequestURI("/api/v1/auth/logout");
+        assertFalse(filter.shouldNotFilter(uriOnly));
     }
 
     @Test
@@ -149,8 +165,7 @@ class JwtAuthenticationFilterTest {
     @ValueSource(strings = {
             "/api/v1/auth/register",
             "/api/v1/auth/login",
-            "/api/v1/auth/refresh",
-            "/api/v1/auth/logout"
+            "/api/v1/auth/refresh"
     })
     void shouldNotFilter_publicPaths_whenOnlyTheRequestUriCarriesThePath(String path) {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", path);

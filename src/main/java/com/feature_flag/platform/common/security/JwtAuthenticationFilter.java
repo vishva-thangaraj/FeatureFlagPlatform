@@ -35,10 +35,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // RequestPaths, never getServletPath(): the latter is empty outside a servlet mapping, so under
         // MockMvc this skip-list matched nothing and the filter ran on the credential endpoints too.
         String path = RequestPaths.of(request);
+        // Logout is deliberately NOT here. It used to be, which meant no principal was ever established
+        // for it, so TokenServiceImpl.logout could not tell who was calling and revoked whichever refresh
+        // token it was handed — anyone holding a leaked token could end someone else's session. The
+        // ownership check there only bites if the caller is authenticated first.
         return path.equals("/api/v1/auth/register")
                 || path.equals("/api/v1/auth/login")
-                || path.equals("/api/v1/auth/refresh")
-                || path.equals("/api/v1/auth/logout");
+                || path.equals("/api/v1/auth/refresh");
     }
 
     @Override

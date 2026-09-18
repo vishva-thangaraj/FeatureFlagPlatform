@@ -24,7 +24,6 @@ public final class PublicEndpoints {
             "/api/v1/auth/register",
             "/api/v1/auth/login",
             "/api/v1/auth/refresh",
-            "/api/v1/auth/logout",
             // Acceptance stays reachable without credentials only because an invitee who has no account
             // yet registers through it. That makes permitAll the *absence* of a check, not a decision that
             // anyone may accept: an unauthenticated request here still carries an
