@@ -369,9 +369,14 @@ Delete a tenant.
 
 ---
 
-#### `POST /api/v1/tenants/invite` (Protected)
+#### `POST /api/v1/invitations` (Protected)
 
-Invite a user to the current tenant by email. Requires the caller to have an active membership in their current tenant context.
+Invite a user to the current tenant by email. Requires the caller to have an active membership in their
+current tenant context, and the `OWNER` or `ADMIN` role.
+
+The role being granted may not outrank the caller's own role in that tenant: an `ADMIN` can invite at
+`ADMIN`, `MEMBER` or `VIEWER`, but not at `OWNER`. A role name that is not recognised — including one that
+differs only by case — is a `400`, not a `500`.
 
 **Request:**
 
@@ -627,7 +632,7 @@ POST /api/auth/refresh { refreshToken: "..." }  --> new accessToken + refreshTok
 ### 5. Invite User
 
 ```
-POST /api/v1/tenants/invite { email, role }  --> sends email with link to client app
+POST /api/v1/invitations { email, role }  --> sends email with link to client app
 ```
 
 The email contains a link to the **client app**: `http://localhost:3000/invitations/accept?token=<token>`

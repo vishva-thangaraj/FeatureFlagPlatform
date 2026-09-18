@@ -7,7 +7,6 @@ import com.feature_flag.platform.auth.dto.SwitchTenantRequest;
 import com.feature_flag.platform.auth.entity.Role;
 import com.feature_flag.platform.auth.entity.User;
 import com.feature_flag.platform.auth.enums.UserStatus;
-import com.feature_flag.platform.auth.repository.RoleRepository;
 import com.feature_flag.platform.auth.repository.UserRepository;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
@@ -19,7 +18,6 @@ import com.feature_flag.platform.common.exception.UserSuspendedException;
 import com.feature_flag.platform.common.security.TenantMembershipResolver;
 import com.feature_flag.platform.tenant.entity.UserInvitation;
 import com.feature_flag.platform.tenant.enums.InvitationStatus;
-import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
 import com.feature_flag.platform.tenant.repository.MembershipRepository;
@@ -59,23 +57,17 @@ public class AuthServiceImpl implements AuthService {
 
     private final UserRepository userRepository;
     private final MembershipRepository membershipRepository;
-    private final RoleRepository roleRepository;
-    private final UserInvitationRepository userInvitationRepository;
     private final TokenService tokenService;
     private final PasswordEncoder passwordEncoder;
     private final TenantMembershipResolver tenantMembershipResolver;
 
     public AuthServiceImpl(UserRepository userRepository,
                            MembershipRepository membershipRepository,
-                           RoleRepository roleRepository,
-                           UserInvitationRepository userInvitationRepository,
                            TokenService tokenService,
                            PasswordEncoder passwordEncoder,
                            TenantMembershipResolver tenantMembershipResolver) {
         this.userRepository = userRepository;
         this.membershipRepository = membershipRepository;
-        this.roleRepository = roleRepository;
-        this.userInvitationRepository = userInvitationRepository;
         this.tokenService = tokenService;
         this.passwordEncoder = passwordEncoder;
         this.tenantMembershipResolver = tenantMembershipResolver;
