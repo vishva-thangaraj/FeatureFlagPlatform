@@ -27,7 +27,7 @@ import com.feature_flag.platform.tenant.enums.TenantPlan;
 import com.feature_flag.platform.tenant.mapper.TenantMapper;
 import com.feature_flag.platform.tenant.repository.ApiKeyRepository;
 import com.feature_flag.platform.tenant.repository.MembershipRepository;
-import com.feature_flag.platform.tenant.repository.TenantRefreshTokenRepository;
+import com.feature_flag.platform.auth.repository.RefreshTokenRepository;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
 import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
 import com.feature_flag.platform.util.TestEntityUtil;
@@ -60,7 +60,7 @@ class TenantServiceTest {
     @Mock private RoleRepository roleRepository;
     @Mock private ApiKeyRepository apiKeyRepository;
     @Mock private UserInvitationRepository userInvitationRepository;
-    @Mock private TenantRefreshTokenRepository tenantRefreshTokenRepository;
+    @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private FeatureRuleRepository featureRuleRepository;
     @Mock private FeatureUserOverrideRepository featureUserOverrideRepository;
     @Mock private FeatureEnvStatusRepository featureEnvStatusRepository;
@@ -80,7 +80,7 @@ class TenantServiceTest {
     @BeforeEach
     void setUp() {
         tenantService = new TenantServiceImpl(tenantRepository, userRepository, membershipRepository,
-                roleRepository, apiKeyRepository, userInvitationRepository, tenantRefreshTokenRepository,
+                roleRepository, apiKeyRepository, userInvitationRepository, refreshTokenRepository,
                 featureRuleRepository, featureUserOverrideRepository, featureEnvStatusRepository,
                 featureRepository, envRepository, tenantMembershipResolver, tenantMapper);
 
@@ -242,8 +242,8 @@ class TenantServiceTest {
         verify(envRepository).deleteAllByTenantId(100L);
         verify(userInvitationRepository).deleteAllByTenantId(100L);
         verify(apiKeyRepository).deleteAllByTenantId(100L);
-        verify(tenantRefreshTokenRepository).detachReplacementChainsByTenantId(100L);
-        verify(tenantRefreshTokenRepository).deleteAllByTenantId(100L);
+        verify(refreshTokenRepository).detachReplacementChainsByTenantId(100L);
+        verify(refreshTokenRepository).deleteAllByTenantId(100L);
         verify(membershipRepository).deleteMembershipRolesByTenantId(100L);
         verify(membershipRepository).deleteAllByTenantId(100L);
         verify(tenantRepository).delete(testTenant);
@@ -263,7 +263,7 @@ class TenantServiceTest {
 
         InOrder inOrder = inOrder(featureRuleRepository, featureUserOverrideRepository,
                 featureEnvStatusRepository, featureRepository, envRepository,
-                tenantRefreshTokenRepository, membershipRepository, tenantRepository);
+                refreshTokenRepository, membershipRepository, tenantRepository);
         // Rules and overrides hang off feature_env_status...
         inOrder.verify(featureRuleRepository).deleteAllByTenantId(100L);
         inOrder.verify(featureUserOverrideRepository).deleteAllByTenantId(100L);
@@ -272,8 +272,8 @@ class TenantServiceTest {
         inOrder.verify(featureRepository).deleteAllByTenantId(100L);
         inOrder.verify(envRepository).deleteAllByTenantId(100L);
         // ...refresh tokens point at each other, so the chain is broken before the delete...
-        inOrder.verify(tenantRefreshTokenRepository).detachReplacementChainsByTenantId(100L);
-        inOrder.verify(tenantRefreshTokenRepository).deleteAllByTenantId(100L);
+        inOrder.verify(refreshTokenRepository).detachReplacementChainsByTenantId(100L);
+        inOrder.verify(refreshTokenRepository).deleteAllByTenantId(100L);
         // ...membership_roles points at memberships, which a bulk delete would not clean up...
         inOrder.verify(membershipRepository).deleteMembershipRolesByTenantId(100L);
         inOrder.verify(membershipRepository).deleteAllByTenantId(100L);
@@ -308,7 +308,7 @@ class TenantServiceTest {
         verify(tenantRepository, never()).delete(any(Tenant.class));
         verify(tenantRepository, never()).findById(anyLong());
         // Not one row of the cascade may have been touched before the refusal.
-        verifyNoInteractions(apiKeyRepository, userInvitationRepository, tenantRefreshTokenRepository,
+        verifyNoInteractions(apiKeyRepository, userInvitationRepository, refreshTokenRepository,
                 membershipRepository, featureRuleRepository, featureUserOverrideRepository,
                 featureEnvStatusRepository, featureRepository, envRepository);
     }
@@ -335,6 +335,6 @@ class TenantServiceTest {
         // The 404 is decided before the cascade starts, so a vanished tenant deletes nothing either.
         verifyNoInteractions(featureRuleRepository, featureUserOverrideRepository,
                 featureEnvStatusRepository, featureRepository, envRepository, apiKeyRepository,
-                userInvitationRepository, tenantRefreshTokenRepository, membershipRepository);
+                userInvitationRepository, refreshTokenRepository, membershipRepository);
     }
 }

@@ -26,7 +26,7 @@ import com.feature_flag.platform.tenant.enums.TenantPlan;
 import com.feature_flag.platform.tenant.mapper.TenantMapper;
 import com.feature_flag.platform.tenant.repository.ApiKeyRepository;
 import com.feature_flag.platform.tenant.repository.MembershipRepository;
-import com.feature_flag.platform.tenant.repository.TenantRefreshTokenRepository;
+import com.feature_flag.platform.auth.repository.RefreshTokenRepository;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
 import com.feature_flag.platform.tenant.repository.UserInvitationRepository;
 import jakarta.validation.Valid;
@@ -57,7 +57,7 @@ public class TenantServiceImpl implements TenantService {
     private final RoleRepository roleRepository;
     private final ApiKeyRepository apiKeyRepository;
     private final UserInvitationRepository userInvitationRepository;
-    private final TenantRefreshTokenRepository tenantRefreshTokenRepository;
+    private final RefreshTokenRepository refreshTokenRepository;
     private final FeatureRuleRepository featureRuleRepository;
     private final FeatureUserOverrideRepository featureUserOverrideRepository;
     private final FeatureEnvStatusRepository featureEnvStatusRepository;
@@ -72,7 +72,7 @@ public class TenantServiceImpl implements TenantService {
                              RoleRepository roleRepository,
                              ApiKeyRepository apiKeyRepository,
                              UserInvitationRepository userInvitationRepository,
-                             TenantRefreshTokenRepository tenantRefreshTokenRepository,
+                             RefreshTokenRepository refreshTokenRepository,
                              FeatureRuleRepository featureRuleRepository,
                              FeatureUserOverrideRepository featureUserOverrideRepository,
                              FeatureEnvStatusRepository featureEnvStatusRepository,
@@ -86,7 +86,7 @@ public class TenantServiceImpl implements TenantService {
         this.roleRepository = roleRepository;
         this.apiKeyRepository = apiKeyRepository;
         this.userInvitationRepository = userInvitationRepository;
-        this.tenantRefreshTokenRepository = tenantRefreshTokenRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
         this.featureRuleRepository = featureRuleRepository;
         this.featureUserOverrideRepository = featureUserOverrideRepository;
         this.featureEnvStatusRepository = featureEnvStatusRepository;
@@ -235,8 +235,8 @@ public class TenantServiceImpl implements TenantService {
         int apiKeys = apiKeyRepository.deleteAllByTenantId(tenantId);
 
         // Sessions: break the rotation chain before the rows go, so the self-FK cannot decide the outcome.
-        tenantRefreshTokenRepository.detachReplacementChainsByTenantId(tenantId);
-        int refreshTokens = tenantRefreshTokenRepository.deleteAllByTenantId(tenantId);
+        refreshTokenRepository.detachReplacementChainsByTenantId(tenantId);
+        int refreshTokens = refreshTokenRepository.deleteAllByTenantId(tenantId);
 
         // Memberships, join rows first — a bulk delete will not clean those up for us.
         membershipRepository.deleteMembershipRolesByTenantId(tenantId);
