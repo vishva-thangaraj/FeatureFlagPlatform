@@ -550,7 +550,8 @@ Returns the flag/targeting **array** for an environment. **The platform does not
 the SDK computes on/off from this payload. Supports `ETag`/`If-None-Match` → `304 Not Modified`.
 
 > These currently sit behind the dashboard user JWT. **API-key authentication is required before a
-> real SDK can use them** (see TARGETING_PLAN.md). Usable today only for the dashboard's own preview.
+> real SDK can use them**: an SDK shipped to a client cannot hold a user's credentials, so API-key
+> authentication is a prerequisite. Usable today only for the dashboard's own preview.
 
 #### `GET /api/v1/config?envName=prod` (Protected)
 
@@ -580,7 +581,8 @@ One flag. `404` if the feature is not configured for that environment.
 
 **SDK evaluation contract:** the normative precedence order (kill switch → deny list → allow list →
 rules → percentage), rule matching, and the MurmurHash3 bucketing algorithm every SDK must implement
-identically are specified in **TARGETING_PLAN.md, Phase 4**. Follow it exactly — the server never
+identically are specified in the SDK targeting specification, which is maintained outside this
+repository. Follow it exactly — the server never
 returns a decision, only this config.
 
 ---

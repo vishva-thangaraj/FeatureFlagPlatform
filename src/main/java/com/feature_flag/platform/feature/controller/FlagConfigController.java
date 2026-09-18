@@ -22,8 +22,9 @@ import java.time.Instant;
  * Client-facing endpoints. Returns the flag/targeting array for an environment; the SDK evaluates.
  * Keyed by feature key + env name (not TSIDs) so SDKs need not know internal ids (D10).
  *
- * <p>NOTE: these currently sit behind the dashboard user JWT. API-key auth is required before this
- * is usable by a real SDK — see TARGETING_PLAN.md Phase 3 "Authentication gap".
+ * <p>NOTE: these currently sit behind the dashboard user JWT. A real SDK cannot use them until API-key
+ * authentication exists: an SDK shipped to a client cannot hold a user's credentials. Usable today only
+ * for the dashboard's own preview.
  */
 @RestController
 @RequestMapping("/api/v1/config")

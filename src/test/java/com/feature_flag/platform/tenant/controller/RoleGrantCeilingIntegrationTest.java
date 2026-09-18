@@ -46,18 +46,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <ul>
  *   <li>invite a second address they control with {@code "role":"OWNER"} (or the dormant
- *       {@code "SUPER_ADMIN"}), accept it, and hold a role no endpoint would otherwise give them; or</li>
+ *       accept it, and hold a role no endpoint would otherwise give them; or</li>
  *   <li>PUT {@code {"roleName":"OWNER"}} onto any non-owner membership, their own included.
  *       {@code updateMemberRole}'s existing guard refuses to change an <em>existing</em> OWNER's role,
  *       which is a different question entirely.</li>
  * </ul>
  *
  * <p>The rule now enforced: a caller may only grant a role at or below their own rank in the tenant they
- * are acting in, ranked {@code SUPER_ADMIN > OWNER > ADMIN > MEMBER > VIEWER}.
+ * are acting in, ranked {@code OWNER > ADMIN > MEMBER > VIEWER}.
  *
- * <p>{@link #ownerCannotInviteASuperAdmin()} and {@link #ownerCannotPromoteAMemberToSuperAdmin()} are the
- * ones that fail if anybody reaches for {@code RoleName.ordinal()}: SUPER_ADMIN is <em>declared</em> last
- * and so has the highest ordinal of the lot, which an ordinal comparison reads as the lowest privilege.
+ * <p>The cases that fail if anybody reaches for {@code RoleName.ordinal()} are the ordinary ones —
+ * {@link #adminCannotPromoteAMemberToOwner()} and its siblings. Ordinal runs opposite to privilege here:
+ * OWNER is declared first and so has the <em>lowest</em> ordinal while holding the highest rank, so an
+ * ordinal comparison concludes that VIEWER outranks OWNER and permits every grant this class forbids.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -171,23 +172,19 @@ class RoleGrantCeilingIntegrationTest {
                 .isEmpty();
     }
 
+    /**
+     * SUPER_ADMIN has been removed from {@code RoleName}. It stays pinned here because the name may still
+     * exist as a row in the {@code roles} table of any database seeded before the removal — the schema is
+     * managed by ddl-auto, so nothing deleted it. A grant naming it must be refused as an unknown role
+     * (400) rather than resolved from the database and handed out, which is exactly what the old
+     * "look it up in roles, then valueOf" ordering would have done.
+     */
     @Test
-    void adminCannotInviteASuperAdmin() throws Exception {
+    void ownerCannotInviteASuperAdmin_becauseTheRoleNoLongerExists() throws Exception {
         String invitee = freshInvitee();
 
-        mockMvc.perform(invite(adminToken, invitee, RoleName.SUPER_ADMIN.name()))
-                .andExpect(status().isForbidden());
-
-        assertThat(invitationsFor(invitee)).isEmpty();
-    }
-
-    /** The ordinal trap: SUPER_ADMIN is declared last, so an ordinal comparison would wave this through. */
-    @Test
-    void ownerCannotInviteASuperAdmin() throws Exception {
-        String invitee = freshInvitee();
-
-        mockMvc.perform(invite(ownerToken, invitee, RoleName.SUPER_ADMIN.name()))
-                .andExpect(status().isForbidden());
+        mockMvc.perform(invite(ownerToken, invitee, "SUPER_ADMIN"))
+                .andExpect(status().isBadRequest());
 
         assertThat(invitationsFor(invitee)).isEmpty();
     }
@@ -267,19 +264,11 @@ class RoleGrantCeilingIntegrationTest {
         assertThat(rolesOf(adminMembership)).containsExactly(RoleName.ADMIN.name());
     }
 
+    /** The removed role must be equally unreachable on the other grant path. */
     @Test
-    void adminCannotPromoteAMemberToSuperAdmin() throws Exception {
-        mockMvc.perform(setRole(adminToken, memberMembership, RoleName.SUPER_ADMIN.name()))
-                .andExpect(status().isForbidden());
-
-        assertThat(rolesOf(memberMembership)).containsExactly(RoleName.MEMBER.name());
-    }
-
-    /** The ordinal trap again, on the other grant path. */
-    @Test
-    void ownerCannotPromoteAMemberToSuperAdmin() throws Exception {
-        mockMvc.perform(setRole(ownerToken, memberMembership, RoleName.SUPER_ADMIN.name()))
-                .andExpect(status().isForbidden());
+    void ownerCannotPromoteAMemberToSuperAdmin_becauseTheRoleNoLongerExists() throws Exception {
+        mockMvc.perform(setRole(ownerToken, memberMembership, "SUPER_ADMIN"))
+                .andExpect(status().isBadRequest());
 
         assertThat(rolesOf(memberMembership)).containsExactly(RoleName.MEMBER.name());
     }

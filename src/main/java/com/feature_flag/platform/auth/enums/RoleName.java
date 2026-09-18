@@ -6,13 +6,14 @@ import java.util.Optional;
 /**
  * The roles a membership can hold, each carrying its explicit position in the privilege hierarchy.
  *
- * <p><b>The rank is a constructor argument on purpose — never use {@link #ordinal()}.</b> Declaration order
- * here is historical: {@code SUPER_ADMIN} was appended last (moving it would silently rewrite the meaning of
- * any persisted ordinal), yet it is the <em>highest</em> role. An ordinal-based comparison therefore inverts
- * the top of the hierarchy and reads SUPER_ADMIN as the least privileged role, which would let any caller
- * grant it. Because the rank is a constructor argument, the ranking is total over this enum by construction:
- * a role added later cannot compile without declaring where it sits, so it can never default into
- * "grantable by anyone".
+ * <p><b>The rank is a constructor argument on purpose — never use {@link #ordinal()}.</b> Ordinal runs
+ * <em>opposite</em> to privilege here: OWNER is declared first and ranks highest, VIEWER is declared last
+ * and ranks lowest, so an ordinal comparison would conclude that VIEWER outranks OWNER and wave through
+ * every escalation this enum exists to stop. Declaration order is not a safe proxy in either direction —
+ * this enum previously ended with a {@code SUPER_ADMIN} constant that was the highest role of all while
+ * sorting last. Because the rank is a constructor argument, the ranking is total over this enum by
+ * construction: a role added later cannot compile without declaring where it sits, so it can never
+ * default into "grantable by anyone".
  *
  * <p>The numbers are spaced so a new role can be slotted between two existing ones without renumbering.
  * Only their order is meaningful.
@@ -21,8 +22,7 @@ public enum RoleName {
     OWNER(80),
     ADMIN(60),
     MEMBER(40),
-    VIEWER(20),
-    SUPER_ADMIN(100);
+    VIEWER(20);
 
     private final int rank;
 
