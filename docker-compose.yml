@@ -20,7 +20,11 @@ services:
       SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET:-dGhpcy1pcy1hLWRldi1vbmx5LWp3dC1zZWNyZXQta2V5LTMyYg==}
+      # No default, by design. This used to carry a base64 key that is committed to the repository, so
+      # anyone who could read the repo could forge an HS256 token with any sub/tenantId/roles they liked
+      # against every deployment that had not overridden it. `:?` makes compose refuse to start instead.
+      # Generate one with: openssl rand -base64 32   (see .env.example)
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set - generate one with "openssl rand -base64 32"}
       MAIL_HOST: mailpit
       MAIL_PORT: 1025
       SERVER_PORT: 8080

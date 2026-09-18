@@ -186,8 +186,18 @@ public class ApiSecurityConfigLoader {
         return config.getDefaults().getThrottle();
     }
 
+    /**
+     * Whether an endpoint with no rule of its own requires authentication. Read by
+     * {@link PublicEndpointPolicyValidator}, which cross-checks this policy against the {@code permitAll}
+     * list in {@code SecurityConfig}.
+     */
     public boolean isDefaultAuthRequired() {
         return config.getDefaults().isAuthRequired();
+    }
+
+    /** Every rule in the policy, in declaration order. */
+    public List<EndpointSecurityRule> getRules() {
+        return List.copyOf(config.getEndpoints());
     }
 
     private String buildKey(String path, String method) {
