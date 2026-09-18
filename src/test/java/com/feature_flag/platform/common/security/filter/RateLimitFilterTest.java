@@ -1,5 +1,6 @@
 package com.feature_flag.platform.common.security.filter;
 
+import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.common.security.config.ApiSecurityConfigLoader;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -9,6 +10,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.util.matcher.IpAddressMatcher;
 
@@ -380,5 +384,123 @@ class RateLimitFilterTest {
                     "round " + round + ": three seconds of refill must yield exactly three tokens");
             clock.set(start + 3_000);
         }
+    }
+
+    // ------------------------------------------------------------------ who the bucket belongs to
+
+    /**
+     * Authenticates the thread as {@code userId}, exactly as JwtAuthenticationFilter and
+     * TenantContextFilter leave the context by the time this filter now runs.
+     */
+    private void authenticateAs(long userId) {
+        TenantUserDetails principal =
+                new TenantUserDetails(userId, "u" + userId + "@test.com", 1L, List.of("VIEWER"));
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+    }
+
+    /**
+     * The regression for the dead per-user branch. This filter used to be registered ahead of
+     * JwtAuthenticationFilter under a STATELESS session policy, so the SecurityContext was guaranteed
+     * empty and every request was keyed by address: an abusive account simply moved between addresses and
+     * was never limited as an account. It now runs after authentication, so the principal decides.
+     */
+    @Test
+    void authenticatedCaller_isThrottledAcrossEveryAddressTheyUse() throws Exception {
+        RateLimitFilter filter = noProxyFilter();
+        authenticateAs(7L);
+
+        // A different source address on every single request - the old per-IP key made each of these a
+        // brand-new bucket with a full burst.
+        int allowed = 0;
+        for (int i = 0; i < 40; i++) {
+            if (send(filter, "POST", LOGIN, "203.0.113." + i, null) == 200) {
+                allowed++;
+            }
+        }
+
+        assertEquals(LOGIN_BURST, allowed, "an authenticated caller is throttled as a caller, not per IP");
+        assertEquals(1, filter.bucketCount(), "40 addresses, one user, one bucket");
+    }
+
+    /** Two authenticated callers must not share an allowance, even from the very same address. */
+    @Test
+    void twoAuthenticatedCallersFromOneAddress_doNotShareAnAllowance() throws Exception {
+        RateLimitFilter filter = noProxyFilter();
+
+        authenticateAs(1L);
+        assertEquals(LOGIN_BURST, allowedOf(filter, "POST", LOGIN, REAL_CLIENT, i -> null, 40));
+
+        // Same NAT, same egress address, different person: their allowance is untouched. Pooling these
+        // into one IP bucket is what let one noisy colleague throttle a whole office.
+        authenticateAs(2L);
+        assertEquals(LOGIN_BURST, allowedOf(filter, "POST", LOGIN, REAL_CLIENT, i -> null, 40));
+
+        assertEquals(2, filter.bucketCount(), "one bucket per user, not one per address");
+    }
+
+    /**
+     * The half that must NOT change: the credential endpoints are unauthenticated by definition, so the
+     * per-IP brute-force limit api-security.json declares for them (login 20/min, burst 5) still applies.
+     */
+    @Test
+    void unauthenticatedCaller_isStillThrottledPerAddress() throws Exception {
+        RateLimitFilter filter = noProxyFilter();
+        SecurityContextHolder.clearContext();
+
+        assertEquals(LOGIN_BURST, allowedOf(filter, "POST", LOGIN, REAL_CLIENT, i -> null, 40),
+                "login must keep its 20/min, burst 5 brute-force limit for anonymous callers");
+
+        // A second address is a second unauthenticated client, so it gets its own allowance as before.
+        assertEquals(LOGIN_BURST, allowedOf(filter, "POST", LOGIN, UNTRUSTED_CLIENT, i -> null, 40));
+    }
+
+    /** An anonymous token (no TenantUserDetails principal) must not be mistaken for an authenticated one. */
+    @Test
+    void anonymousAuthentication_fallsBackToTheAddressKey() throws Exception {
+        RateLimitFilter filter = noProxyFilter();
+        SecurityContextHolder.getContext().setAuthentication(
+                new AnonymousAuthenticationToken("key", "anonymousUser",
+                        List.of(new SimpleGrantedAuthority("ROLE_ANONYMOUS"))));
+
+        int allowed = 0;
+        for (int i = 0; i < 40; i++) {
+            if (send(filter, "POST", LOGIN, "203.0.113." + i, null) == 200) {
+                allowed++;
+            }
+        }
+
+        assertEquals(40, allowed, "each anonymous address is its own client, exactly as before");
+    }
+
+    // ------------------------------------------------------------------ which rule the request matched
+
+    /**
+     * The filter matched rules on getServletPath(), which is empty for any request that did not go through
+     * a servlet mapping - every request under MockMvc. So the per-endpoint throttles were never exercised
+     * by a test: everything fell through to the unmatched-scope default of burst 10.
+     */
+    @Test
+    void theRuleIsMatchedFromTheRequestUri_notTheServletPath() throws Exception {
+        RateLimitFilter filter = noProxyFilter();
+
+        MockHttpServletRequest probe = new MockHttpServletRequest("POST", LOGIN);
+        probe.setServletPath("");
+        assertEquals("", probe.getServletPath(), "precondition: this is what MockMvc looks like");
+
+        int allowed = 0;
+        for (int i = 0; i < 40; i++) {
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", LOGIN);
+            request.setServletPath("");
+            request.setRemoteAddr(REAL_CLIENT);
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            filter.doFilter(request, response, new MockFilterChain());
+            if (response.getStatus() == 200) {
+                allowed++;
+            }
+        }
+
+        assertEquals(LOGIN_BURST, allowed,
+                "login's burst of 5 must apply even when getServletPath() is empty");
     }
 }

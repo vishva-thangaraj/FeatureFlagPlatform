@@ -89,23 +89,11 @@ public class TenantContextFilter extends OncePerRequestFilter {
     /**
      * The request path this filter matches its rules against, context path stripped.
      *
-     * <p>Deliberately not {@code getServletPath()}. That returns the full path only because the dispatcher
-     * servlet is mapped at {@code /}, and it is empty whenever the request was not routed through a servlet
-     * mapping — notably under MockMvc, where {@code getRequestURI()} carries the path instead. Matching on
-     * the servlet path therefore silently matched nothing in every integration test, so the tenant-less and
-     * path-tenant rules below looked covered while never actually running. Deriving the path from the
-     * request URI gives the same answer in production and keeps the tests honest.
+     * <p>See {@link RequestPaths} for why this is not {@code getServletPath()}. The other rule-matching
+     * filters now share that helper, so all of them agree on what "the path" is.
      */
     private String requestPath(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        if (uri == null || uri.isEmpty()) {
-            return request.getServletPath();
-        }
-        String contextPath = request.getContextPath();
-        if (contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath)) {
-            uri = uri.substring(contextPath.length());
-        }
-        return uri;
+        return RequestPaths.of(request);
     }
 
     @Override
@@ -114,8 +102,10 @@ public class TenantContextFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
 
-        // Unauthenticated (public endpoints, or this filter's stray auto-registered instance running
-        // ahead of the security chain) — nothing to scope.
+        // Unauthenticated (a public endpoint, or a request with no/invalid bearer token) — nothing to
+        // scope. This filter only ever runs inside the security chain now: SecurityConfig disables the
+        // container-level auto-registration of every security filter, so there is no stray instance that
+        // could reach this line ahead of JwtAuthenticationFilter.
         if (authentication == null || !(authentication.getPrincipal() instanceof TenantUserDetails principal)) {
             filterChain.doFilter(request, response);
             return;
