@@ -11,10 +11,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The ranking every grant decision rests on.
  *
- * <p>The trap this pins shut: {@code RoleName} is declared {@code OWNER, ADMIN, MEMBER, VIEWER,
- * SUPER_ADMIN}, so declaration order puts SUPER_ADMIN <em>last</em> while it must rank <em>highest</em>.
- * Anything built on {@code ordinal()} therefore reads SUPER_ADMIN as the least privileged role and lets any
- * caller at all hand it out.
+ * <p>The trap this pins shut: declaration order is not privilege order. {@code RoleName} is declared
+ * {@code OWNER, ADMIN, MEMBER, VIEWER}, so ordinal runs <em>opposite</em> to rank — OWNER is first and
+ * highest, VIEWER is last and lowest. Anything built on {@code ordinal()} therefore concludes that VIEWER
+ * outranks OWNER and waves through every escalation the ceiling exists to stop. The enum previously also
+ * ended with SUPER_ADMIN, which ranked highest while sorting last, so the two orders have never agreed in
+ * either direction.
  */
 class RoleNameRankTest {
 
@@ -25,18 +27,29 @@ class RoleNameRankTest {
                 .toList();
 
         assertThat(byRankDescending).containsExactly(
-                RoleName.SUPER_ADMIN, RoleName.OWNER, RoleName.ADMIN, RoleName.MEMBER, RoleName.VIEWER);
+                RoleName.OWNER, RoleName.ADMIN, RoleName.MEMBER, RoleName.VIEWER);
     }
 
-    /** Stated as its own assertion because it is the exact inversion an ordinal comparison introduces. */
+    /**
+     * Stated as its own assertion because it is the exact inversion an ordinal comparison introduces:
+     * OWNER sorts <em>before</em> VIEWER by declaration yet must outrank it, so {@code ordinal()} gets
+     * this backwards. If someone ever "simplifies" the rank away, this fails.
+     */
     @Test
-    void superAdminOutranksOwner_despiteBeingDeclaredLast() {
-        assertThat(RoleName.SUPER_ADMIN.ordinal())
+    void ownerOutranksViewer_despiteSortingFirstByDeclaration() {
+        assertThat(RoleName.OWNER.ordinal())
                 .as("declaration order is the trap, not the ranking")
-                .isGreaterThan(RoleName.OWNER.ordinal());
+                .isLessThan(RoleName.VIEWER.ordinal());
 
-        assertThat(RoleName.SUPER_ADMIN.outranksOrEquals(RoleName.OWNER)).isTrue();
-        assertThat(RoleName.OWNER.outranksOrEquals(RoleName.SUPER_ADMIN)).isFalse();
+        assertThat(RoleName.OWNER.outranksOrEquals(RoleName.VIEWER)).isTrue();
+        assertThat(RoleName.VIEWER.outranksOrEquals(RoleName.OWNER)).isFalse();
+    }
+
+    /** SUPER_ADMIN was removed; nothing may quietly reintroduce a role the grant ceiling never sees. */
+    @Test
+    void superAdminIsGone() {
+        assertThat(RoleName.parse("SUPER_ADMIN")).isEmpty();
+        assertThat(List.of(RoleName.values())).extracting(Enum::name).doesNotContain("SUPER_ADMIN");
     }
 
     @Test
@@ -67,7 +80,9 @@ class RoleNameRankTest {
     void highestOfPicksTheStrongestRoleHeld() {
         assertThat(RoleName.highestOf(List.of("VIEWER", "OWNER", "MEMBER"))).contains(RoleName.OWNER);
         assertThat(RoleName.highestOf(List.of("VIEWER"))).contains(RoleName.VIEWER);
-        assertThat(RoleName.highestOf(List.of("ADMIN", "SUPER_ADMIN"))).contains(RoleName.SUPER_ADMIN);
+        assertThat(RoleName.highestOf(List.of("VIEWER", "OWNER"))).contains(RoleName.OWNER);
+        // An unrecognised name must not become the highest role by accident.
+        assertThat(RoleName.highestOf(List.of("ADMIN", "SUPER_ADMIN"))).contains(RoleName.ADMIN);
     }
 
     @Test

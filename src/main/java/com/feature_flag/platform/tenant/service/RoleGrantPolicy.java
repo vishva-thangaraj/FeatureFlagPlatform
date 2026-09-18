@@ -24,7 +24,7 @@ import java.util.Optional;
  *
  * <p>Both endpoints are open to OWNER <em>and</em> ADMIN in {@code api-security.json}, and neither used to
  * constrain the role being granted. An ADMIN could therefore invite a second address they control as OWNER
- * (or as the dormant SUPER_ADMIN) and accept it, or simply PUT {@code {"roleName":"OWNER"}} onto their own
+ * and accept it, or simply PUT {@code {"roleName":"OWNER"}} onto their own
  * membership. {@code updateMemberRole}'s existing guard only refuses to change an <em>existing</em> OWNER's
  * role, which says nothing about the role being granted, so the intended ceiling was never enforced at all.
  *

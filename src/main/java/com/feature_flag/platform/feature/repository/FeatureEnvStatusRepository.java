@@ -2,6 +2,7 @@ package com.feature_flag.platform.feature.repository;
 
 import com.feature_flag.platform.feature.entity.FeatureEnvStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -50,4 +51,17 @@ public interface FeatureEnvStatusRepository extends JpaRepository<FeatureEnvStat
     """)
     List<FeatureEnvStatus> findAllConfigs(@Param("tenantId") Long tenantId,
                                           @Param("envName") String envName);
+
+    /**
+     * Tenant-deletion cascade: every status joining one of the tenant's features to one of its envs. Must
+     * run after the rules and overrides that reference these rows, and before the features and envs they
+     * reference.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            delete from FeatureEnvStatus fes
+            where fes.feature.id in (select f.id from Feature f where f.tenant.id = :tenantId)
+               or fes.env.id in (select e.id from Env e where e.tenant.id = :tenantId)
+            """)
+    int deleteAllByTenantId(@Param("tenantId") Long tenantId);
 }

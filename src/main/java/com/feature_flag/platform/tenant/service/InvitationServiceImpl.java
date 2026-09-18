@@ -161,7 +161,7 @@ public class InvitationServiceImpl implements InvitationService {
         // called RoleName.valueOf, and MySQL's default collation is case-insensitive, so {"role":"admin"}
         // passed the lookup and then threw IllegalArgumentException straight out of the service as a 500.
         RoleName roleName = roleGrantPolicy.requireKnownRole(role);
-        // An ADMIN inviting a second address they control as OWNER (or as the dormant SUPER_ADMIN) and
+        // An ADMIN inviting a second address they control as OWNER and
         // accepting it was a complete bypass of the ceiling updateMemberRole tries to enforce.
         roleGrantPolicy.requireMayGrant(userDetails, roleName);
 

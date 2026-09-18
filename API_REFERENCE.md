@@ -352,7 +352,7 @@ OWNER of a different tenant grants nothing here.
 
 #### `DELETE /api/v1/tenants/{tenantId}` (Protected)
 
-Delete a tenant.
+Delete a tenant **and everything it owns**.
 
 **Requires:** an **ACTIVE** membership in `{tenantId}` **with the `OWNER` role in that tenant**.
 
@@ -362,16 +362,56 @@ Delete a tenant.
 |---------------------------------------------|----------|
 | No membership, or membership is not ACTIVE  | `403`    |
 | Membership is ACTIVE but not `OWNER`        | `403`    |
+| Tenant does not exist (caller is an OWNER of it) | `404` |
 
-> Deleting a tenant removes its memberships and API keys. Invitations, features and environments belonging
-> to the tenant are **not** cleaned up yet, so deleting a tenant that still has any of them fails on a
-> foreign-key constraint. Delete those first.
+> ### ⚠️ This is a hard delete and it cannot be undone
+>
+> There is no archive, no grace period and no restore. One call removes, in a single transaction:
+>
+> | Removed with the tenant | |
+> |---|---|
+> | `feature` | every flag the tenant has defined |
+> | `env` | every environment |
+> | `feature_env_status` | every per-environment on/off state and rollout percentage |
+> | `feature_rule` | every targeting rule |
+> | `feature_user_override` | every per-user override |
+> | `user_invitations` | every invitation, including ones still pending — their tokens stop working |
+> | `api_keys` | every SDK key — **live integrations stop resolving flags immediately** |
+> | `refresh_tokens` | every session scoped to this tenant |
+> | `memberships` | every member's access |
+>
+> Users, roles and any other tenant a member belongs to are untouched. Deleting a tenant affects exactly
+> one tenant.
+>
+> The request is all-or-nothing: if any part of it fails, nothing is deleted and the tenant is left exactly
+> as it was. There is no partially deleted state.
+
+**Earlier behaviour:** this endpoint used to clean up only `memberships` and `api_keys`, so deleting a
+tenant that had ever created a feature, an environment or an invitation — or whose owner had ever logged
+in — failed on a foreign-key constraint and returned `409`. That `409` was unresolvable, because no
+endpoint existed to detach those rows first. It no longer occurs.
+
+**No event is published.** Tenant deletion emits nothing on `feature.flag.changes.v1`: that schema requires
+a `featureKey` and an `envName` on every event and has no tenant-level `changeType`, and fanning the delete
+out as one synthetic event per feature/env would be both misleading and unbounded. Consumers see the tenant
+disappear the next time they resolve config for it. A tenant-lifecycle topic is the right home for this and
+is not built yet; see `docs/feature-events.md`, which does not define feature create/delete events either.
+
+**Not built (deliberate):** a two-step confirmation — for example requiring the tenant's name to be echoed
+back — would be a reasonable guard on an action this destructive, but it changes the request contract of
+this endpoint and is deferred rather than smuggled in. Authorization (`OWNER` of this tenant) is currently
+the only gate.
 
 ---
 
-#### `POST /api/v1/tenants/invite` (Protected)
+#### `POST /api/v1/invitations` (Protected)
 
-Invite a user to the current tenant by email. Requires the caller to have an active membership in their current tenant context.
+Invite a user to the current tenant by email. Requires the caller to have an active membership in their
+current tenant context, and the `OWNER` or `ADMIN` role.
+
+The role being granted may not outrank the caller's own role in that tenant: an `ADMIN` can invite at
+`ADMIN`, `MEMBER` or `VIEWER`, but not at `OWNER`. A role name that is not recognised — including one that
+differs only by case — is a `400`, not a `500`.
 
 **Request:**
 
@@ -545,7 +585,8 @@ Returns the flag/targeting **array** for an environment. **The platform does not
 the SDK computes on/off from this payload. Supports `ETag`/`If-None-Match` → `304 Not Modified`.
 
 > These currently sit behind the dashboard user JWT. **API-key authentication is required before a
-> real SDK can use them** (see TARGETING_PLAN.md). Usable today only for the dashboard's own preview.
+> real SDK can use them**: an SDK shipped to a client cannot hold a user's credentials, so API-key
+> authentication is a prerequisite. Usable today only for the dashboard's own preview.
 
 #### `GET /api/v1/config?envName=prod` (Protected)
 
@@ -575,7 +616,8 @@ One flag. `404` if the feature is not configured for that environment.
 
 **SDK evaluation contract:** the normative precedence order (kill switch → deny list → allow list →
 rules → percentage), rule matching, and the MurmurHash3 bucketing algorithm every SDK must implement
-identically are specified in **TARGETING_PLAN.md, Phase 4**. Follow it exactly — the server never
+identically are specified in the SDK targeting specification, which is maintained outside this
+repository. Follow it exactly — the server never
 returns a decision, only this config.
 
 ---
@@ -627,7 +669,7 @@ POST /api/auth/refresh { refreshToken: "..." }  --> new accessToken + refreshTok
 ### 5. Invite User
 
 ```
-POST /api/v1/tenants/invite { email, role }  --> sends email with link to client app
+POST /api/v1/invitations { email, role }  --> sends email with link to client app
 ```
 
 The email contains a link to the **client app**: `http://localhost:3000/invitations/accept?token=<token>`

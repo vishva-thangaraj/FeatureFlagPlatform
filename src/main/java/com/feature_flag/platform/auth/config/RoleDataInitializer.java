@@ -8,6 +8,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Component
@@ -22,13 +23,10 @@ public class RoleDataInitializer implements ApplicationRunner {
     @Override
     @Transactional
     public void run(ApplicationArguments args) {
-        List<String> roleNames = List.of(
-                RoleName.OWNER.name(),
-                RoleName.ADMIN.name(),
-                RoleName.MEMBER.name(),
-                RoleName.VIEWER.name(),
-                RoleName.SUPER_ADMIN.name()
-        );
+        // Derived from the enum rather than restated, so the table cannot drift from the roles the code
+        // actually recognises. The hand-written list previously outlived SUPER_ADMIN's removal from
+        // RoleName and would have kept seeding a role nothing could grant or check.
+        List<String> roleNames = Arrays.stream(RoleName.values()).map(RoleName::name).toList();
 
         for (String roleName : roleNames) {
             if (roleRepository.findByName(roleName).isEmpty()) {
