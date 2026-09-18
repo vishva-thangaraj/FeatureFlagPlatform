@@ -74,23 +74,24 @@ public class AuthServiceImpl implements AuthService {
                 .build();
         user = userRepository.save(user);
 
-        // Auto-link any validated invitations for this email
-        List<UserInvitation> validatedInvitations = userInvitationRepository
-                .findByEmailAndStatus(request.email(), InvitationStatus.VALIDATED);
-        for (UserInvitation invitation : validatedInvitations) {
-            Role invitationRole = roleRepository.findByName(invitation.getRole().name())
-                    .orElseThrow();
-            Membership membership = Membership.builder()
-                    .user(user)
-                    .tenant(invitation.getTenant())
-                    .roles(Set.of(invitationRole))
-                    .status(MembershipStatus.ACTIVE)
-                    .build();
-            membershipRepository.save(membership);
-            invitation.setStatus(InvitationStatus.ACCEPTED);
-            userInvitationRepository.save(invitation);
-        }
-
+        // Registration deliberately joins no tenant.
+        //
+        // This used to loop over findByEmailAndStatus(email, VALIDATED) and auto-create a membership from
+        // every match. Nothing in the codebase ever assigns VALIDATED, so the query always returned zero
+        // rows and the block was dead. The two ways to make it live are not equivalent:
+        //
+        //  - Making the status real would mean "whoever registers this address joins the tenant". Anyone
+        //    who learns that an invitation exists for an address they can receive mail at — or simply
+        //    registers before the real invitee does — is silently made a member with the invited role,
+        //    without ever presenting the invite token. That is a new authorization path, weaker than the
+        //    one it would shadow, granted as a side effect of an unauthenticated public endpoint.
+        //  - Deleting it costs nothing, because the invite-accept path already covers this exact case in
+        //    full: InvitationServiceImpl.acceptInvitation takes a RegisterRequest, requires it to carry the
+        //    invited address, and creates the account, the membership and the status change in one
+        //    transaction — with the token proving the invitation and the chosen password proving the
+        //    account is the caller's own.
+        //
+        // So it is deleted. An unregistered invitee registers *through* their invitation, not alongside it.
         return tokenService.createTokenPair(user, null, Collections.emptyList());
     }
 

@@ -46,6 +46,10 @@ public final class Messages {
     public static final String TENANT_CANNOT_REMOVE_OWNER = "tenant.cannot.remove.owner";
     public static final String TENANT_CANNOT_CHANGE_OWNER_ROLE = "tenant.cannot.change.owner.role";
 
+    // Role granting
+    public static final String ROLE_NAME_INVALID = "role.name.invalid";
+    public static final String ROLE_GRANT_ABOVE_OWN_RANK = "role.grant.above.own.rank";
+
 
     //Feature
     public static final String FEATURE_KEY_ALREADY_EXISTS = "feature.key.already.exists";

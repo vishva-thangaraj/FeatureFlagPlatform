@@ -11,6 +11,7 @@ import com.feature_flag.platform.auth.service.AuthService;
 import com.feature_flag.platform.auth.service.TokenService;
 import com.feature_flag.platform.common.config.I18N;
 import com.feature_flag.platform.common.config.Messages;
+import com.feature_flag.platform.common.exception.ConflictException;
 import com.feature_flag.platform.common.exception.ForbiddenException;
 import com.feature_flag.platform.common.exception.InvalidTokenException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
@@ -49,6 +50,7 @@ public class InvitationServiceImpl implements InvitationService {
     private final EmailService emailService;
     private final TokenService tokenService;
     private final AuthService authService;
+    private final RoleGrantPolicy roleGrantPolicy;
 
     public InvitationServiceImpl(UserInvitationRepository userInvitationRepository,
                                  UserRepository userRepository,
@@ -58,7 +60,8 @@ public class InvitationServiceImpl implements InvitationService {
                                  JwtProperties jwtProperties,
                                  EmailService emailService,
                                  TokenService tokenService,
-                                 AuthService authService) {
+                                 AuthService authService,
+                                 RoleGrantPolicy roleGrantPolicy) {
         this.userInvitationRepository = userInvitationRepository;
         this.userRepository = userRepository;
         this.membershipRepository = membershipRepository;
@@ -68,6 +71,7 @@ public class InvitationServiceImpl implements InvitationService {
         this.emailService = emailService;
         this.tokenService = tokenService;
         this.authService = authService;
+        this.roleGrantPolicy = roleGrantPolicy;
     }
 
     /**
@@ -153,15 +157,19 @@ public class InvitationServiceImpl implements InvitationService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         I18N.getMessage(Messages.RESOURCE_TENANT_NOT_FOUND, tenantId)));
 
-        UserInvitation existingInvitation = userInvitationRepository.findByEmailAndTenantId(email, tenantId);
-        if (existingInvitation != null) {
-            throw new IllegalStateException(I18N.getMessage(Messages.USER_INVITATION_ALREADY_EXISTS, email));
-        }
+        // 400 for an unknown or wrongly-cased name. The old order asked the database first and only then
+        // called RoleName.valueOf, and MySQL's default collation is case-insensitive, so {"role":"admin"}
+        // passed the lookup and then threw IllegalArgumentException straight out of the service as a 500.
+        RoleName roleName = roleGrantPolicy.requireKnownRole(role);
+        // An ADMIN inviting a second address they control as OWNER (or as the dormant SUPER_ADMIN) and
+        // accepting it was a complete bypass of the ceiling updateMemberRole tries to enforce.
+        roleGrantPolicy.requireMayGrant(userDetails, roleName);
 
-        roleRepository.findByName(role)
+        supersedeOrRejectExistingInvitation(email, tenantId);
+
+        roleRepository.findByName(roleName.name())
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        I18N.getMessage(Messages.RESOURCE_ROLE_NOT_FOUND, role)));
-        RoleName roleName = RoleName.valueOf(role);
+                        I18N.getMessage(Messages.RESOURCE_ROLE_NOT_FOUND, roleName.name())));
 
         Long userId = userDetails.getUserId();
         User inviter = userRepository.findById(userId)
@@ -221,6 +229,35 @@ public class InvitationServiceImpl implements InvitationService {
 
         invitation.setStatus(InvitationStatus.DECLINED);
         userInvitationRepository.save(invitation);
+    }
+
+    /**
+     * Decides whether this address may be invited to this tenant again.
+     *
+     * <p>The guard used to be {@code findByEmailAndTenantId != null}, with no regard for status: once any
+     * invitation existed for an address in a tenant it could never be invited again. Since nothing ever
+     * assigns {@code CANCELLED} there is no way to clear one either, so an invite that expired unaccepted,
+     * was declined by mistake, or belonged to a member who has since been removed permanently locked that
+     * address out of the tenant with a 409.
+     *
+     * <p>Only a <em>live</em> PENDING invitation blocks — that is the case the guard was actually for, and
+     * it still refuses. An invitation that has passed its expiry is stale even though its row still reads
+     * PENDING (the status is only rewritten when someone tries to accept it), so it is marked EXPIRED here
+     * as it is superseded: leaving it PENDING would let the old token stay usable alongside the new one.
+     */
+    private void supersedeOrRejectExistingInvitation(String email, Long tenantId) {
+        List<UserInvitation> pending = userInvitationRepository
+                .findByEmailIgnoreCaseAndTenantIdAndStatus(email, tenantId, InvitationStatus.PENDING);
+
+        Instant now = Instant.now();
+        for (UserInvitation invitation : pending) {
+            if (invitation.getExpiresAt().isAfter(now)) {
+                throw new ConflictException(
+                        I18N.getMessage(Messages.USER_INVITATION_ALREADY_EXISTS, email));
+            }
+            invitation.setStatus(InvitationStatus.EXPIRED);
+        }
+        userInvitationRepository.saveAll(pending);
     }
 
     private UserInvitation requirePendingInvitation(String rawToken) {
