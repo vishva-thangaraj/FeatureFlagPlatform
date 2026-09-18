@@ -35,7 +35,7 @@ public class FeatureRuleController {
     public ResponseEntity<List<String>> listAttributes(
             @PathVariable Long featureId,
             @AuthenticationPrincipal TenantUserDetails userDetails) {
-        return ResponseEntity.ok(featureService.listAttributes(userDetails.getTenantId()));
+        return ResponseEntity.ok(featureService.listAttributes(featureId, userDetails.getTenantId()));
     }
 
     @GetMapping("/envs/{envId}/rules")

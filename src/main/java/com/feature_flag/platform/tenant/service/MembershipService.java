@@ -18,24 +18,33 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Set;
 
 @Service
 public class MembershipService {
     private final MembershipRepository membershipRepository;
     private final MembershipListResponseMapper membershipListResponseMapper;
     private final RoleRepository roleRepository;
+    private final RoleGrantPolicy roleGrantPolicy;
 
     public MembershipService(MembershipRepository membershipRepository,
                              MembershipListResponseMapper membershipListResponseMapper,
-                             RoleRepository roleRepository) {
+                             RoleRepository roleRepository,
+                             RoleGrantPolicy roleGrantPolicy) {
         this.membershipRepository = membershipRepository;
         this.membershipListResponseMapper = membershipListResponseMapper;
         this.roleRepository = roleRepository;
+        this.roleGrantPolicy = roleGrantPolicy;
     }
 
+    /**
+     * REMOVED memberships are excluded. The row survives removal (it is the audit trail, and the unique
+     * (user, tenant) constraint means re-adding someone reuses it), but it is not a membership any more:
+     * {@code TenantMembershipResolver} already refuses every request such a user makes, so listing them
+     * here had the admin UI and the auth layer disagreeing about who belongs to the tenant.
+     */
     public MembersListResponse getMembersList(Long tenantId) {
-        List<Membership> memberships = membershipRepository.findByTenantId(tenantId);
+        List<Membership> memberships =
+                membershipRepository.findByTenantIdAndStatusNot(tenantId, MembershipStatus.REMOVED);
         List<MemberResponse> members = membershipListResponseMapper.toMemberResponses(memberships);
         return new MembersListResponse(members);
     }
@@ -45,6 +54,13 @@ public class MembershipService {
         return membershipListResponseMapper.toMemberResponses(List.of(membership)).get(0);
     }
 
+    /**
+     * The guard below only ever refused to change an <em>existing</em> OWNER's role, which says nothing
+     * about the role being handed out. Since {@code api-security.json} opens this endpoint to ADMIN as well
+     * as OWNER, an ADMIN could PUT {@code {"roleName":"OWNER"}} onto any non-owner membership — their own
+     * included — and promote themselves past the ceiling the owner guard was meant to defend.
+     * {@link RoleGrantPolicy} now caps the granted role at the caller's own rank in this tenant.
+     */
     @Transactional
     public MemberResponse updateMemberRole(Long membershipId, UpdateMemberRoleRequest request, Long tenantId) {
         Membership membership = findByIdAndTenant(membershipId, tenantId);
@@ -53,11 +69,21 @@ public class MembershipService {
             throw new ForbiddenException(I18N.getMessage(Messages.TENANT_CANNOT_CHANGE_OWNER_ROLE));
         }
 
-        Role newRole = roleRepository.findByName(request.roleName())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        I18N.getMessage(Messages.RESOURCE_ROLE_NOT_FOUND, request.roleName())));
+        // 400 for an unknown or wrongly-cased name, before any authorization decision is taken on it.
+        RoleName requested = roleGrantPolicy.requireKnownRole(request.roleName());
+        roleGrantPolicy.requireCurrentCallerMayGrant(requested);
 
-        membership.setRoles(Set.of(newRole));
+        Role newRole = roleRepository.findByName(requested.name())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_ROLE_NOT_FOUND, requested.name())));
+
+        // Mutate in place rather than swapping the set, exactly as InvitationServiceImpl.activateMembership
+        // does. Assigning Set.of(...) put an immutable collection on a managed entity, and the merge that
+        // save() performs on it calls clear() on that collection — an UnsupportedOperationException, i.e. a
+        // 500, for any role change made while the membership was already in the persistence context (a
+        // second change in one request, or one following a read of the same membership).
+        membership.getRoles().clear();
+        membership.getRoles().add(newRole);
         membershipRepository.save(membership);
 
         return membershipListResponseMapper.toMemberResponses(List.of(membership)).get(0);
@@ -75,9 +101,16 @@ public class MembershipService {
         membershipRepository.save(membership);
     }
 
+    /**
+     * Resolves a membership of this tenant that is still a membership.
+     *
+     * <p>A REMOVED row is deliberately invisible here, so reading, re-roling or re-removing one answers 404
+     * rather than succeeding against someone who is no longer a member. The status filter is part of the
+     * lookup rather than a check bolted on afterwards, so every caller gets it.
+     */
     private Membership findByIdAndTenant(Long membershipId, Long tenantId) {
-        return membershipRepository.findById(membershipId)
-                .filter(m -> m.getTenant().getId().equals(tenantId))
+        return membershipRepository
+                .findByIdAndTenantIdAndStatusNot(membershipId, tenantId, MembershipStatus.REMOVED)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         I18N.getMessage(Messages.RESOURCE_MEMBERSHIP_NOT_FOUND)));
     }

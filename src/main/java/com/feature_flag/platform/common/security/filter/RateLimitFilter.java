@@ -42,6 +42,8 @@ import java.util.function.LongSupplier;
  *       map is swept of replenished buckets, and it is hard-capped.</li>
  *   <li><b>Refill must be atomic.</b> Tokens and the refill timestamp move together under a single CAS, so
  *       concurrent requests cannot both apply the same refill window.</li>
+ *   <li><b>An authenticated caller must be throttled as a caller, not as an address.</b> See
+ *       {@link #resolveClientKey}; this filter runs after authentication so the principal is available.</li>
  * </ul>
  */
 @Component
@@ -135,7 +137,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        String path = request.getServletPath();
+        // RequestPaths, never getServletPath(): the latter is empty outside a servlet mapping, so every
+        // request under MockMvc used to fall through to UNMATCHED_SCOPE and the per-endpoint throttles
+        // (login 20/min, etc.) were never exercised by a test.
+        String path = RequestPaths.of(request);
         String method = request.getMethod();
 
         Optional<EndpointSecurityRule> rule = configLoader.getRule(path, method);
@@ -200,12 +205,26 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
     }
 
+    /**
+     * The identity the bucket is keyed by.
+     *
+     * <p>An authenticated request is throttled as the USER, never as the address it came from. This filter
+     * used to sit ahead of {@code JwtAuthenticationFilter} with a {@code STATELESS} session policy, so the
+     * {@code SecurityContext} was guaranteed empty here and this branch was dead code: everything was
+     * pooled per IP. That pooled every user behind a NAT or shared egress into one allowance (one noisy
+     * colleague throttled the whole office) while a single abusive account spread over a handful of
+     * addresses was never limited as an account at all. {@code SecurityConfig} now runs this filter
+     * directly after authentication, so the principal is available.
+     *
+     * <p>Unauthenticated requests - which is every request to the credential endpoints, since
+     * {@code JwtAuthenticationFilter} skips them outright - still key on the client address, so the
+     * login/register/refresh brute-force limits declared in {@code api-security.json} apply exactly as
+     * before.
+     */
     private String resolveClientKey(HttpServletRequest request) {
-        // NOTE: this branch is currently unreachable - RateLimitFilter runs before JwtAuthenticationFilter,
-        // so the SecurityContext is always empty here. Left as-is deliberately; changing the filter order
-        // belongs to SecurityConfig.
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.getPrincipal() instanceof TenantUserDetails userDetails) {
+        if (auth != null && auth.getPrincipal() instanceof TenantUserDetails userDetails
+                && userDetails.getUserId() != null) {
             return "user:" + userDetails.getUserId();
         }
         return "ip:" + resolveClientIp(request);

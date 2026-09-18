@@ -5,6 +5,7 @@ import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.security.Key;
@@ -21,9 +22,25 @@ public class JwtTokenProvider {
     private final JwtProperties jwtProperties;
     private final SecureRandom secureRandom = new SecureRandom();
 
+    /**
+     * The constructor Spring uses. Taking {@link JwtSecretPolicy} rather than reading
+     * {@code jwtProperties.getSecret()} directly is what guarantees the startup guard runs <em>before</em>
+     * a signing key can exist: a weak, published or missing secret fails the context, it does not quietly
+     * become the key the platform signs with.
+     */
+    @Autowired
+    public JwtTokenProvider(JwtProperties jwtProperties, JwtSecretPolicy secretPolicy) {
+        this(jwtProperties, secretPolicy.getSecret());
+    }
+
+    /** Direct construction from an already-chosen secret; used by tests that supply their own key. */
     public JwtTokenProvider(JwtProperties jwtProperties) {
+        this(jwtProperties, jwtProperties.getSecret());
+    }
+
+    private JwtTokenProvider(JwtProperties jwtProperties, String secret) {
         this.jwtProperties = jwtProperties;
-        byte[] keyBytes = Base64.getDecoder().decode(jwtProperties.getSecret());
+        byte[] keyBytes = Base64.getDecoder().decode(secret);
         this.signingKey = Keys.hmacShaKeyFor(keyBytes);
     }
 
