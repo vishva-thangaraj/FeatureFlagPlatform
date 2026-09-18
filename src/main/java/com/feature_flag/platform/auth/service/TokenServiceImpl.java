@@ -14,9 +14,12 @@ import com.feature_flag.platform.common.exception.UserSuspendedException;
 import com.feature_flag.platform.common.security.JwtProperties;
 import com.feature_flag.platform.common.security.JwtTokenProvider;
 import com.feature_flag.platform.common.security.TenantMembershipResolver;
+import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.common.security.TokenHashUtil;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -110,14 +113,52 @@ public class TokenServiceImpl implements TokenService {
                 jwtProperties.getAccessTokenExpirationMs());
     }
 
+    /**
+     * Revokes the presented refresh token, refusing to revoke one that belongs to somebody other than
+     * the authenticated caller.
+     *
+     * <p><strong>Why the check is conditional.</strong> {@code /api/v1/auth/logout} is currently
+     * {@code authRequired:false} in api-security.json, {@code permitAll} in {@code SecurityConfig}, and
+     * skipped outright by {@code JwtAuthenticationFilter.shouldNotFilter} — so no principal is
+     * established for it and there is nobody to compare the token against. Those three files are owned
+     * elsewhere this wave; once logout is made authenticated there, a {@link TenantUserDetails}
+     * principal is always present and this comparison becomes the ownership gate the endpoint needs.
+     * Until then it still closes the case where a principal happens to be available, and it is written
+     * so that flipping the endpoint to authenticated requires no further change here.
+     *
+     * <p>A mismatch is reported as a plain invalid-token 401 rather than a 403: saying "that token is
+     * not yours" would confirm to the holder of a stolen token that the token is live and whose it is.
+     *
+     * <p>Note the access token is untouched — there is no denylist or token-version claim, so a JWT
+     * already in flight stays valid until it expires. That is assessed, and deferred, in the report
+     * accompanying this commit.
+     */
     @Override
     @Transactional
     public void logout(RefreshRequest request) {
         String tokenHash = TokenHashUtil.sha256(request.refreshToken());
         refreshTokenRepository.findByTokenHash(tokenHash).ifPresent(token -> {
+            Long callerId = authenticatedUserId();
+            if (callerId != null && !callerId.equals(token.getUser().getId())) {
+                throw new InvalidTokenException(I18N.getMessage(Messages.TOKEN_INVALID));
+            }
             token.setRevoked(true);
             refreshTokenRepository.save(token);
         });
+    }
+
+    /**
+     * The id of the authenticated caller, or {@code null} when the request carries no authenticated
+     * principal. Anonymous requests arrive with an {@code AnonymousAuthenticationToken} whose principal
+     * is a {@code String}, so the pattern match rejects them as well as an entirely empty context.
+     */
+    private Long authenticatedUserId() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.isAuthenticated()
+                && authentication.getPrincipal() instanceof TenantUserDetails details) {
+            return details.getUserId();
+        }
+        return null;
     }
 
     @Override

@@ -10,7 +10,9 @@ import com.feature_flag.platform.auth.enums.UserStatus;
 import com.feature_flag.platform.auth.repository.RoleRepository;
 import com.feature_flag.platform.auth.repository.UserRepository;
 import com.feature_flag.platform.common.config.I18N;
+import com.feature_flag.platform.common.config.Messages;
 import com.feature_flag.platform.common.exception.EmailAlreadyExistsException;
+import com.feature_flag.platform.common.exception.ForbiddenException;
 import com.feature_flag.platform.common.exception.InvalidCredentialsException;
 import com.feature_flag.platform.common.exception.ResourceNotFoundException;
 import com.feature_flag.platform.common.exception.TenantAccessDeniedException;
@@ -27,12 +29,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Collections;
@@ -118,6 +122,27 @@ class AuthServiceTest {
             assertThrows(EmailAlreadyExistsException.class, () -> authService.register(request));
             verify(userRepository, never()).save(any());
         }
+
+        /**
+         * Registration is anonymous, so its rejection must not double as a user-directory lookup. The
+         * message the caller receives is resolved from an argument-free key: the probed address is
+         * never handed to the message formatter, so there is no path by which it can come back out.
+         * {@link com.feature_flag.platform.common.config.AuthMessageCatalogueTest} covers the other
+         * half — that the text behind that key does not assert the account exists either.
+         */
+        @Test
+        void duplicateEmail_conflictMessageNeitherEchoesTheProbedAddressNorNamesTheOldKey() {
+            RegisterRequest request = new RegisterRequest("dup@test.com", "pass12345", "Jane", null);
+            when(userRepository.existsByEmail("dup@test.com")).thenReturn(true);
+
+            EmailAlreadyExistsException thrown =
+                    assertThrows(EmailAlreadyExistsException.class, () -> authService.register(request));
+
+            assertEquals(Messages.AUTH_REGISTRATION_CONFLICT, thrown.getMessage());
+            assertFalse(thrown.getMessage().contains("dup@test.com"));
+            i18nMock.verify(() -> I18N.getMessage(Messages.AUTH_REGISTRATION_CONFLICT));
+            i18nMock.verify(() -> I18N.getMessage(anyString(), eq("dup@test.com")), never());
+        }
     }
 
     @Nested
@@ -154,6 +179,39 @@ class AuthServiceTest {
             assertThrows(InvalidCredentialsException.class, () -> authService.login(request));
         }
 
+        /**
+         * The enumeration oracle here was latency, not content: a known address always paid for a
+         * BCrypt comparison, an unknown one returned as soon as the index lookup missed. Asserting
+         * wall-clock time would be flaky on a shared CI box, so this asserts the mechanism instead —
+         * the miss path really does hand the submitted password to the encoder, against the decoy hash.
+         */
+        @Test
+        void unknownEmail_stillPaysForABcryptComparisonAgainstTheDecoyHash() {
+            LoginRequest request = new LoginRequest("no@test.com", "pass", null);
+            when(userRepository.findByEmail("no@test.com")).thenReturn(Optional.empty());
+
+            assertThrows(InvalidCredentialsException.class, () -> authService.login(request));
+
+            verify(passwordEncoder).matches("pass", AuthServiceImpl.DUMMY_PASSWORD_HASH);
+        }
+
+        /**
+         * The decoy only equalises the timing if BCrypt actually runs against it.
+         * {@code BCryptPasswordEncoder.matches} bails out in microseconds on anything that does not
+         * parse as a BCrypt digest, which would silently restore the gap, so this pins the constant to
+         * the shape the encoder's own BCRYPT_PATTERN accepts, at the strength SecurityConfig's bean
+         * uses — and checks a real encoder neither accepts a password against it nor rejects it as
+         * malformed.
+         */
+        @Test
+        void decoyHash_isAWellFormedBcryptDigestAtTheConfiguredStrength() {
+            assertTrue(AuthServiceImpl.DUMMY_PASSWORD_HASH.matches("^\\$2[aby]\\$10\\$[./0-9A-Za-z]{53}$"),
+                    "decoy hash must be a well-formed BCrypt digest at strength 10, was: "
+                            + AuthServiceImpl.DUMMY_PASSWORD_HASH);
+            assertFalse(new BCryptPasswordEncoder().matches("pass", AuthServiceImpl.DUMMY_PASSWORD_HASH),
+                    "the decoy must never verify any password");
+        }
+
         @Test
         void wrongPassword_throwsInvalidCredentials() {
             LoginRequest request = new LoginRequest("user@test.com", "wrong", null);
@@ -169,6 +227,28 @@ class AuthServiceTest {
             when(userRepository.findByEmail("user@test.com")).thenReturn(Optional.of(testUser));
             when(passwordEncoder.matches("pass", "encoded-pass")).thenReturn(true);
             assertThrows(UserSuspendedException.class, () -> authService.login(request));
+        }
+
+        /**
+         * The status check used to be a denylist naming SUSPENDED, so INACTIVE — and any status added
+         * to the enum later — authenticated normally. It is now an allowlist: only ACTIVE gets a
+         * session. SUSPENDED keeps its own message and exception; everything else is a plain 403.
+         */
+        @Test
+        void inactiveUser_isRefusedAndGetsNoTokens() {
+            testUser.setStatus(UserStatus.INACTIVE);
+            LoginRequest request = new LoginRequest("user@test.com", "pass", null);
+            when(userRepository.findByEmail("user@test.com")).thenReturn(Optional.of(testUser));
+            when(passwordEncoder.matches("pass", "encoded-pass")).thenReturn(true);
+
+            ForbiddenException thrown =
+                    assertThrows(ForbiddenException.class, () -> authService.login(request));
+
+            assertEquals(ForbiddenException.class, thrown.getClass(),
+                    "INACTIVE is not suspension and must not borrow the suspension message");
+            assertEquals(Messages.AUTH_USER_NOT_ACTIVE, thrown.getMessage());
+            assertEquals("USER_NOT_ACTIVE", thrown.getErrorCode());
+            verify(tokenService, never()).createTokenPair(any(), any(), any());
         }
 
         @Test
@@ -202,6 +282,56 @@ class AuthServiceTest {
             when(tenantMembershipResolver.requireActiveMembership(1L, 100L))
                     .thenThrow(new TenantAccessDeniedException("denied"));
             assertThrows(TenantAccessDeniedException.class, () -> authService.login(request));
+        }
+
+        /**
+         * findByUserId has no ORDER BY, so two logins with identical data could previously pick
+         * different default tenants — and therefore mint different roles claims — depending on what
+         * the database chose to return first. The two rounds here differ only in the repository's
+         * ordering; the tenant handed to createTokenPair must not.
+         */
+        @Test
+        void defaultTenant_isTheOldestActiveMembershipWhateverOrderTheRepositoryReturns() {
+            Tenant laterTenant = TestEntityUtil.withId(Tenant.builder().name("LaterOrg").build(), 101L);
+            Membership olderMembership = TestEntityUtil.withId(Membership.builder()
+                    .user(testUser).tenant(testTenant).status(MembershipStatus.ACTIVE)
+                    .roles(Set.of(ownerRole)).build(), 200L);
+            Membership newerMembership = TestEntityUtil.withId(Membership.builder()
+                    .user(testUser).tenant(laterTenant).status(MembershipStatus.ACTIVE)
+                    .roles(Set.of(ownerRole)).build(), 300L);
+
+            LoginRequest request = new LoginRequest("user@test.com", "pass", null);
+            when(userRepository.findByEmail("user@test.com")).thenReturn(Optional.of(testUser));
+            when(passwordEncoder.matches("pass", "encoded-pass")).thenReturn(true);
+
+            when(membershipRepository.findByUserId(1L)).thenReturn(List.of(newerMembership, olderMembership));
+            authService.login(request);
+            when(membershipRepository.findByUserId(1L)).thenReturn(List.of(olderMembership, newerMembership));
+            authService.login(request);
+
+            ArgumentCaptor<Tenant> tenantCaptor = ArgumentCaptor.forClass(Tenant.class);
+            verify(tokenService, times(2)).createTokenPair(any(), tenantCaptor.capture(), any());
+            assertEquals(List.of(testTenant, testTenant), tenantCaptor.getAllValues(),
+                    "default tenant must not depend on the order the repository happened to return");
+        }
+
+        /** A removed membership never becomes the default, however early the repository returns it. */
+        @Test
+        void defaultTenant_ignoresNonActiveMembershipsEvenWhenTheySortFirst() {
+            Tenant staleTenant = TestEntityUtil.withId(Tenant.builder().name("StaleOrg").build(), 102L);
+            Membership removedButOlder = TestEntityUtil.withId(Membership.builder()
+                    .user(testUser).tenant(staleTenant).status(MembershipStatus.REMOVED)
+                    .roles(Set.of(ownerRole)).build(), 100L);
+
+            LoginRequest request = new LoginRequest("user@test.com", "pass", null);
+            when(userRepository.findByEmail("user@test.com")).thenReturn(Optional.of(testUser));
+            when(passwordEncoder.matches("pass", "encoded-pass")).thenReturn(true);
+            when(membershipRepository.findByUserId(1L))
+                    .thenReturn(List.of(removedButOlder, activeMembership));
+
+            AuthResponse response = authService.login(request);
+
+            assertEquals(testTenant.getId(), response.tenantId());
         }
     }
 
