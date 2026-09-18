@@ -30,7 +30,8 @@ public class ParamValidationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        String path = request.getServletPath();
+        // See RequestPaths: getServletPath() is empty outside a servlet mapping.
+        String path = RequestPaths.of(request);
         String method = request.getMethod();
 
         Optional<EndpointSecurityRule> ruleOpt = configLoader.getRule(path, method);
