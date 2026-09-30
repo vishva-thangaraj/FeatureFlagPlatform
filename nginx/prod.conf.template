@@ -1,0 +1,95 @@
+# Rendered by the nginx image's envsubst at container start. ${API_DOMAIN} is the only
+# placeholder substituted — NGINX_ENVSUBST_FILTER in the compose file restricts it to that
+# one name. Without that filter envsubst would also eat nginx's own $host, $uri and
+# $proxy_add_x_forwarded_for, which would silently break both proxying and the client-IP
+# handling the rate limiter depends on.
+#
+# NOTE ON X-Forwarded-For
+# $proxy_add_x_forwarded_for APPENDS the peer nginx actually saw to whatever the client
+# sent, so the header arriving at the app is "<client-supplied junk>, <real client IP>".
+# Only the entries nginx appended are trustworthy. The backend therefore reads the
+# client IP app.security.rate-limit.proxy-hop-count entries from the RIGHT (1 = this
+# single nginx hop) and only for requests coming from a configured trusted proxy.
+# If another appending proxy (CDN / load balancer) is put in front of nginx, bump
+# RATE_LIMIT_PROXY_HOPS to match, or the app will throttle on that proxy's address.
+
+# ---------------------------------------------------------------------------
+# HTTP: serves the ACME challenge, redirects everything else to HTTPS.
+# ---------------------------------------------------------------------------
+server {
+    listen 80;
+    server_name ${API_DOMAIN};
+
+    # Must stay on plain HTTP and must NOT be redirected — this is how Let's Encrypt
+    # proves domain control on renewal. Renewals are silent when this breaks, and the
+    # certificate simply expires 90 days later.
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ---------------------------------------------------------------------------
+# HTTPS
+# ---------------------------------------------------------------------------
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${API_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${API_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${API_DOMAIN}/privkey.pem;
+
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # Tells browsers never to use http:// for this host again. Deliberately one year
+    # WITHOUT preload: preloading is effectively irreversible, so leave it off until the
+    # certificate has renewed successfully at least once. If you need to fall back to
+    # plain HTTP, drop this header first and wait out the max-age.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header X-Frame-Options           "DENY" always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+
+    # The API
+    location /api/ {
+        proxy_pass http://app:8080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 30s;
+        proxy_read_timeout    60s;
+        proxy_send_timeout    60s;
+    }
+
+    # React frontend — static build files.
+    #
+    # This repository does not contain a frontend build, so with nothing mounted at
+    # /usr/share/nginx/html these locations return 404. That is expected when only the API
+    # is deployed; the dashboard is a separate project.
+    location / {
+        root /usr/share/nginx/html;
+
+        # try_files is the key for SPA routing:
+        # 1. Try exact file match ($uri)         — serves JS, CSS, images
+        # 2. Try directory match ($uri/)          — serves index in subdirectory
+        # 3. Fall back to /index.html             — React Router handles the route
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Cache static assets (JS, CSS, images) for 1 year
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        root /usr/share/nginx/html;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}

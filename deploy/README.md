@@ -25,9 +25,10 @@ keeps no inbound rule for deployment at all, and the runner authenticates to AWS
 ```
 /opt/platform/
 ├── docker-compose.yml     ← deploy/docker-compose.prod.yml
-├── deploy.sh              ← deploy/deploy.sh   (root:root, 755)
-├── .env                   ← non-secret config  (ec2-user, 600)
-└── nginx/prod.conf        ← nginx/prod.conf
+├── deploy.sh              ← deploy/deploy.sh        (root:root, 755)
+├── tls-bootstrap.sh       ← deploy/tls-bootstrap.sh  (root:root, 755)
+├── .env                   ← non-secret config       (ec2-user, 600)
+└── nginx/prod.conf.template  ← nginx/prod.conf.template
 ```
 
 `deploy.sh` is invoked by the SSM agent, which runs as root, so it must be root-owned and
@@ -88,6 +89,61 @@ The deploy IAM user needs only:
 > **Worth upgrading later.** Long-lived access keys in CI are the weakest part of this setup.
 > GitLab can assume an AWS role via OIDC instead (`id_tokens` + an IAM identity provider), which
 > removes the stored credentials entirely. Same `deploy` job, different authentication.
+
+## TLS
+
+`nginx/prod.conf.template` serves HTTPS and redirects HTTP. It reads the hostname from
+`API_DOMAIN`, so set that in `/opt/platform/.env` alongside the URLs:
+
+```
+API_DOMAIN=api.yourdomain.com
+APP_BASE_URL=https://api.yourdomain.com
+APP_CLIENT_BASE_URL=https://yourdomain.com
+```
+
+Point an `A` record for that hostname at the instance's elastic IP, then issue the first
+certificate:
+
+```bash
+sudo API_DOMAIN=api.yourdomain.com /opt/platform/tls-bootstrap.sh you@yourdomain.com
+```
+
+That script exists because of a loop: nginx is configured to load a certificate that does
+not exist yet, so it will not start — and certbot's webroot mode needs nginx already
+serving. It issues the first certificate in **standalone** mode with port 80 free, before
+nginx starts, then installs a twice-daily **webroot** renewal that needs no downtime.
+
+It also checks that the domain resolves to this host first, because certbot's own failure in
+that case complains about authorization rather than DNS and sends people looking in the wrong
+place.
+
+**Confirm renewal works before trusting it** — a silent renewal failure surfaces as an
+expired certificate 90 days later:
+
+```bash
+docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/www/certbot:/var/www/certbot \
+  certbot/certbot renew --webroot -w /var/www/certbot --dry-run
+```
+
+Two notes on the config:
+
+- **HSTS is set to one year without `preload`.** Preloading is effectively irreversible, so
+  leave it off until the certificate has renewed successfully at least once.
+- **The ACME challenge location must stay on plain HTTP** and must not be redirected. It is
+  how Let's Encrypt proves domain control on every renewal.
+
+## Mail
+
+SES needs the domain verified before it will leave the sandbox:
+
+1. SES → Verified identities → verify the **domain**, and publish the DKIM records it gives you
+2. SES → SMTP settings → create SMTP credentials (not IAM keys)
+3. SES → Account dashboard → **request production access**
+
+Until that request is granted, SES delivers only to individually verified addresses.
+Invitations to anyone else are rejected — and because mail is sent on a background thread,
+**the API still returns success** and the failure appears only in the application log. Do not
+read a 200 as "the invitation was delivered" while still in the sandbox.
 
 ## Deploying
 
