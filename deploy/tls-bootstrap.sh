@@ -66,15 +66,24 @@ fi
 log "certificate issued"
 
 # --- 3. start the stack with TLS --------------------------------------------
-log "starting nginx with TLS"
-docker compose up -d nginx
+# Delegated to deploy.sh rather than `docker compose up -d nginx`.
+#
+# Compose resolves the whole file even when told to start one service, and nginx declares
+# depends_on: app — so starting nginx alone still needs IMAGE_TAG and both secrets. Without
+# them the app image renders as "platform:" and Compose fails on an invalid reference.
+# deploy.sh already fetches the secrets, sets the tag and waits for the app to answer, so
+# reusing it keeps that logic in exactly one place.
+TAG="${IMAGE_TAG:-$(cat "$APP_DIR/.current-tag" 2>/dev/null || echo latest)}"
+log "starting the stack with TLS (image tag: $TAG)"
+"$APP_DIR/deploy.sh" "$TAG"
 
-sleep 3
+# deploy.sh proves the app answers over HTTP on localhost. Confirm TLS specifically, from
+# the public hostname, since that is the half this script is responsible for.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://$DOMAIN/api/v1/auth/login" \
   -X POST -H 'Content-Type: application/json' -d '{}' || echo 000)
 
 if [ "$CODE" = "000" ]; then
-  log "WARNING: HTTPS did not answer. nginx logs:"
+  log "WARNING: the app is up but HTTPS did not answer on $DOMAIN. nginx logs:"
   docker compose logs --tail=40 nginx
   exit 1
 fi
