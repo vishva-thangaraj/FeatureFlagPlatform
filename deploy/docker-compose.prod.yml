@@ -38,6 +38,11 @@ services:
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
       APP_MAIL_FROM: ${APP_MAIL_FROM}
+      # Required on port 587 by every hosted SMTP provider — SES, ZeptoMail, Zoho Mail alike.
+      # application.properties defaults it to false, which suits the local Mailpit catcher and
+      # nothing else. Left off, the provider refuses the session and the send fails on a
+      # background thread, so the API still returns 200 and the invitation silently vanishes.
+      MAIL_STARTTLS: ${MAIL_STARTTLS:-true}
 
       APP_BASE_URL: ${APP_BASE_URL}
       APP_CLIENT_BASE_URL: ${APP_CLIENT_BASE_URL}
