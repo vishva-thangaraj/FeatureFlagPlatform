@@ -78,7 +78,7 @@ class FeatureEventPublisherKafkaTemplateTest {
     @Test
     @DisplayName("the record reaches the producer on the contract topic and partition key")
     void publishesOneRecordKeyedByTenantFeatureAndEnv() {
-        FeatureEventPublisher publisher = new FeatureEventPublisher(template, TOPIC, Runnable::run);
+        FeatureEventPublisher publisher = new FeatureEventPublisher(template, TOPIC, "localhost:9092", true, Runnable::run);
 
         publisher.publish(event());
 
@@ -99,7 +99,7 @@ class FeatureEventPublisherKafkaTemplateTest {
         producer.sendException = new SerializationException(
                 "Error registering Avro schema; error code: 409");
 
-        FeatureEventPublisher publisher = new FeatureEventPublisher(template, TOPIC, Runnable::run);
+        FeatureEventPublisher publisher = new FeatureEventPublisher(template, TOPIC, "localhost:9092", true, Runnable::run);
 
         assertThatCode(() -> publisher.publish(event())).doesNotThrowAnyException();
 

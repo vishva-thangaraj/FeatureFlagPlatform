@@ -53,14 +53,30 @@ public class FeatureEventPublisher {
     private final KafkaTemplate<String, FeatureChangeEvent> kafka;
     private final String topic;
     private final Executor executor;
+    private final boolean publishingEnabled;
     private final AtomicLong droppedEvents = new AtomicLong();
 
     public FeatureEventPublisher(KafkaTemplate<String, FeatureChangeEvent> kafka,
                                  @Value("${app.kafka.topic.feature-changes}") String topic,
+                                 @Value("${spring.kafka.bootstrap-servers:}") String bootstrapServers,
+                                 @Value("${app.kafka.enabled:true}") boolean enabled,
                                  @Qualifier(FeatureMessagingConfig.EXECUTOR_BEAN) Executor executor) {
         this.kafka = kafka;
         this.topic = topic;
         this.executor = executor;
+        this.publishingEnabled = enabled && bootstrapServers != null && !bootstrapServers.isBlank();
+
+        if (!this.publishingEnabled) {
+            // Deliberately ERROR, and deliberately not a startup failure. Making an unconsumed,
+            // best-effort notification channel a hard boot dependency would let a missing broker take
+            // the whole API down — including the read paths SDKs depend on — which is a worse outcome
+            // than losing events. The counter and the per-event ERROR below keep the loss measurable.
+            LOGGER.error("{}: feature-change event publishing is DISABLED — {}. Flag changes will still be "
+                            + "applied and served, but no events will reach Kafka. Set KAFKA_BOOTSTRAP_SERVERS "
+                            + "(and KAFKA_SCHEMA_REGISTRY_URL) to enable it.",
+                    LOSS_MARKER,
+                    enabled ? "no broker is configured" : "app.kafka.enabled=false");
+        }
     }
 
     /**
@@ -69,6 +85,10 @@ public class FeatureEventPublisher {
      */
     public void publish(FeatureChangeEvent event) {
         String key = partitionKey(event);
+        if (!publishingEnabled) {
+            recordLoss(event, key, "no Kafka broker is configured for this deployment", null);
+            return;
+        }
         try {
             executor.execute(() -> sendAndReport(event, key));
         } catch (RejectedExecutionException rejected) {

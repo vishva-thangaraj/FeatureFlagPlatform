@@ -115,9 +115,19 @@ class KafkaProducerConfigurationTest {
         assertThat(delivery).isGreaterThanOrEqualTo(linger + request);
     }
 
+    /**
+     * The endpoints must come from the environment and must never fall back to localhost — a deployed
+     * profile silently pointing its producer at itself is the bug this pins shut.
+     *
+     * <p>They are deliberately <em>empty</em> rather than mandatory. Declaring them {@code ${VAR}} with
+     * no default makes an unresolvable placeholder abort startup, which would let a missing broker take
+     * the entire API down — including the read paths SDKs depend on — to protect a channel that has no
+     * consumer yet. Empty disables publishing instead, loudly and countably
+     * (see {@code FeatureEventPublisher}).
+     */
     @ParameterizedTest(name = "profile {0}")
     @ValueSource(strings = {"staging", "prod"})
-    @DisplayName("prod and staging demand their Kafka endpoints from the environment, like JWT_SECRET")
+    @DisplayName("prod and staging take their Kafka endpoints from the environment, never from localhost")
     void deployedProfilesHaveNoLocalhostFallback(String profile) {
         Properties profileFile = load("application-" + profile + ".properties");
 
@@ -125,10 +135,12 @@ class KafkaProducerConfigurationTest {
                 "spring.kafka.properties.schema.registry.url")) {
             String raw = profileFile.getProperty(key);
             assertThat(raw).as("%s must be declared in %s", key, profile).isNotNull();
-            assertThat(raw).matches("\\$\\{[A-Z0-9_]+}");
+            assertThat(raw)
+                    .as("%s must be environment-driven with an empty default, not a literal", key)
+                    .matches("\\$\\{[A-Z0-9_]+:}");
             assertThat(resolvedDefault(raw))
-                    .as("%s must fail startup when unset rather than silently pointing at localhost", key)
-                    .isNull();
+                    .as("%s must never default to localhost in a deployed profile", key)
+                    .isIn(null, "");
         }
     }
 
