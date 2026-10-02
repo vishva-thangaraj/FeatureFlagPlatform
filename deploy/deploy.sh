@@ -53,18 +53,41 @@ docker compose up -d
 # There is no actuator health endpoint in this application, so readiness is inferred:
 # nginx answers 502 while the app is down and something else once it is serving. Any
 # HTTP status from the API path means Spring is up and routing.
-log "waiting for the application to answer"
+# Probe over HTTPS, pinned to loopback with --resolve so the request carries the real
+# hostname (correct SNI, valid certificate, no DNS dependency) while never leaving the box.
+#
+# It used to probe http://localhost. That worked until TLS existed; afterwards nginx answered
+# the redirect itself and the check passed on a 301 without ever reaching Spring — so a deploy
+# with a crash-looping application reported success. A redirect is explicitly NOT ready now.
+DOMAIN=$(grep -E '^API_DOMAIN=' "$APP_DIR/.env" 2>/dev/null | cut -d= -f2-)
+
+probe() {
+  if [ -n "$DOMAIN" ]; then
+    curl -s -o /dev/null -w '%{http_code}' \
+      --resolve "$DOMAIN:443:127.0.0.1" \
+      -X POST "https://$DOMAIN/api/v1/auth/login" \
+      -H 'Content-Type: application/json' -d '{}' 2>/dev/null || echo 000
+  else
+    # No domain configured yet (pre-TLS bootstrap): plain HTTP still reaches the app.
+    curl -s -o /dev/null -w '%{http_code}' \
+      -X POST http://localhost/api/v1/auth/login \
+      -H 'Content-Type: application/json' -d '{}' 2>/dev/null || echo 000
+  fi
+}
+
+log "waiting for the application to answer${DOMAIN:+ on https://$DOMAIN}"
 READY=0
 for i in $(seq 1 30); do
-  CODE=$(curl -s -o /dev/null -w '%{http_code}' \
-    -X POST http://localhost/api/v1/auth/login \
-    -H 'Content-Type: application/json' -d '{}' || echo 000)
+  CODE=$(probe)
 
   case "$CODE" in
-    000|502|503|504)
+    # 000 no connection · 5xx nginx cannot reach the app · 3xx only nginx answered
+    000|5??|3??)
       sleep 5
       ;;
     *)
+      # A 4xx here is success: the request reached Spring and was rejected on its merits
+      # (the empty body fails validation), which is exactly what proves the app is serving.
       log "application responding (HTTP $CODE after $((i * 5))s)"
       READY=1
       break
