@@ -1,18 +1,43 @@
+# Without this, a branch that has an open merge request runs two pipelines for every push —
+# one for the branch and one for the MR — doubling the build minutes and the registry churn.
+workflow:
+    rules:
+        - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+        - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+          when: never
+        - if: '$CI_COMMIT_BRANCH'
+
 stages:
     - test
     - build
-    - push
+    - deploy
+
+variables:
+    IMAGE: $CI_REGISTRY_IMAGE
+    # Every deploy names an immutable tag. `latest` is a convenience pointer, never the
+    # thing that gets deployed — see the deploy job.
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
 
 test:
     stage: test
     image: eclipse-temurin:17-jdk
     script:
         - ./gradlew test
+    artifacts:
+        when: always
+        reports:
+            junit: build/test-results/test/**/TEST-*.xml
+        expire_in: 1 week
     rules:
-        - if: '$CI_PIPELINE_SOURCE == "push"'
         - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-        - if: '$CI_COMMIT_BRANCH == "main"'
+        - if: '$CI_COMMIT_BRANCH'
 
+# Builds ONCE and pushes that exact image.
+#
+# This used to be two jobs: `build` produced $CI_COMMIT_SHORT_SHA and threw it away without
+# pushing, then `push` rebuilt the image from source and published only `:latest`. Two
+# consequences, both bad: the artifact that reached production was never the artifact the
+# pipeline tested, and no revision was addressable, so there was nothing to roll back to.
 build:
     stage: build
     image: docker:24
@@ -20,19 +45,76 @@ build:
         - docker:24-dind
     script:
         - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-        - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA .
+        - docker build -t $IMAGE:$IMAGE_TAG .
+        - docker push $IMAGE:$IMAGE_TAG
+        # `latest` is re-tagged from the image just pushed, never rebuilt, so the two
+        # tags are guaranteed to be the same bytes.
+        - |
+            if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+              docker tag $IMAGE:$IMAGE_TAG $IMAGE:latest
+              docker push $IMAGE:latest
+            fi
     rules:
-        - if: '$CI_PIPELINE_SOURCE == "push"'
         - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+        - if: '$CI_COMMIT_BRANCH'
 
-push:
-    stage: push
-    image: docker:24
-    services:
-        - docker:24-dind
+# Deploys by asking SSM to run /opt/platform/deploy.sh on the instance.
+#
+# Deliberately not SSH: GitLab's shared runners have no fixed egress addresses, so an SSH
+# deploy would mean opening port 22 to 0.0.0.0/0 and storing a private key in CI. SSM needs
+# neither — the instance has no inbound rule for this at all.
+#
+# Manual by design. Promote a build you have looked at, rather than shipping every merge.
+deploy:
+    stage: deploy
+    image:
+        name: amazon/aws-cli:latest
+        entrypoint: [""]
+    variables:
+        # Override when rolling back: set DEPLOY_TAG to an older short SHA.
+        DEPLOY_TAG: $CI_COMMIT_SHORT_SHA
     script:
-        - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-        - docker build -t $CI_REGISTRY_IMAGE:latest .
-        - docker push $CI_REGISTRY_IMAGE:latest
+        - |
+            set -e
+            echo "Deploying $IMAGE:$DEPLOY_TAG to $EC2_INSTANCE_ID"
+
+            CMD_ID=$(aws ssm send-command \
+              --instance-ids "$EC2_INSTANCE_ID" \
+              --document-name AWS-RunShellScript \
+              --comment "deploy $DEPLOY_TAG" \
+              --parameters "commands=['/opt/platform/deploy.sh $DEPLOY_TAG']" \
+              --query Command.CommandId --output text)
+
+            echo "SSM command: $CMD_ID"
+
+            # The waiter returns non-zero for any terminal state that is not Success, so the
+            # real status is read explicitly below rather than inferred from its exit code.
+            aws ssm wait command-executed \
+              --command-id "$CMD_ID" --instance-id "$EC2_INSTANCE_ID" || true
+
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD_ID" --instance-id "$EC2_INSTANCE_ID" \
+              --query Status --output text)
+
+            echo "----- remote stdout -----"
+            aws ssm get-command-invocation \
+              --command-id "$CMD_ID" --instance-id "$EC2_INSTANCE_ID" \
+              --query StandardOutputContent --output text
+
+            if [ "$STATUS" != "Success" ]; then
+              echo "----- remote stderr -----"
+              aws ssm get-command-invocation \
+                --command-id "$CMD_ID" --instance-id "$EC2_INSTANCE_ID" \
+                --query StandardErrorContent --output text
+              echo "Deploy finished with status: $STATUS"
+              exit 1
+            fi
+
+            echo "Deployed $DEPLOY_TAG"
+    environment:
+        name: production
+        url: http://98.130.77.201
     rules:
-        - if: '$CI_COMMIT_BRANCH == "main"'
+        - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+          when: manual
+          allow_failure: false

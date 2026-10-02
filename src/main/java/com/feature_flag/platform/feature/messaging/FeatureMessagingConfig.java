@@ -2,6 +2,7 @@ package com.feature_flag.platform.feature.messaging;
 
 import org.apache.kafka.clients.admin.NewTopic;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -71,6 +72,13 @@ public class FeatureMessagingConfig {
      */
     @Bean
     @ConditionalOnProperty(name = "app.kafka.topic.auto-provision", havingValue = "true", matchIfMissing = true)
+    // Also requires Kafka to actually be configured. Declaring this bean causes Spring's
+    // KafkaAdmin to connect at startup, so with no broker configured it logged a full
+    // "Could not create admin / You must set either bootstrap.servers" stack trace on every
+    // boot — surviving only because spring.kafka.admin.fail-fast is false. The publisher was
+    // already gated this way; the topic declaration was not, so disabling Kafka silenced the
+    // sends but not the provisioning attempt.
+    @ConditionalOnExpression("'${spring.kafka.bootstrap-servers:}' != '' and ${app.kafka.enabled:true}")
     public NewTopic featureChangesTopic(
             @Value("${app.kafka.topic.feature-changes}") String topic,
             @Value("${app.kafka.topic.feature-changes-partitions:6}") int partitions,
