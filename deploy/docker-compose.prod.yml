@@ -1,0 +1,95 @@
+# Production topology: the application behind nginx, with the database external (RDS).
+#
+# Install at /opt/platform/docker-compose.yml on the instance, alongside .env, deploy.sh
+# and nginx/prod.conf.template. The repository's root docker-compose.yml is a DEV file — it carries
+# mailpit, no nginx, and publishes the app port on the host; do not deploy it.
+#
+# IMAGE_TAG is set by deploy.sh to the exact commit being released. It deliberately has no
+# default: a deploy must name the revision it is shipping, so that rolling back is just the
+# same command with an older tag.
+
+services:
+  app:
+    image: registry.gitlab.com/featureflag/platform:${IMAGE_TAG}
+    restart: unless-stopped
+
+    # `expose`, not `ports`. Publishing 8080 on the host would bind Spring Boot to every
+    # interface, leaving the security group as the only thing between the API and the
+    # internet — bypassing nginx, and with it TLS and the X-Forwarded-For handling the
+    # rate limiter depends on. This way the port exists only on the Docker network.
+    expose:
+      - "8080"
+
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      # prod defaults to `validate`. Override to `update` for the one-time schema
+      # bootstrap only, then put it back — leaving it on lets a code change silently
+      # alter production schema on the next deploy.
+      SPRING_JPA_HIBERNATE_DDL_AUTO: ${SPRING_JPA_HIBERNATE_DDL_AUTO:-validate}
+
+      JWT_SECRET: ${JWT_SECRET}
+
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      APP_MAIL_FROM: ${APP_MAIL_FROM}
+      # Required on port 587 by every hosted SMTP provider — SES, ZeptoMail, Zoho Mail alike.
+      # application.properties defaults it to false, which suits the local Mailpit catcher and
+      # nothing else. Left off, the provider refuses the session and the send fails on a
+      # background thread, so the API still returns 200 and the invitation silently vanishes.
+      MAIL_STARTTLS: ${MAIL_STARTTLS:-true}
+
+      APP_BASE_URL: ${APP_BASE_URL}
+      APP_CLIENT_BASE_URL: ${APP_CLIENT_BASE_URL}
+
+      # Number of proxies that APPEND to X-Forwarded-For. nginx alone is 1; add a load
+      # balancer or CloudFront in front and it becomes 2. Get this wrong and every request
+      # is keyed on the proxy's address, so all callers share one rate-limit bucket.
+      RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES}
+      RATE_LIMIT_PROXY_HOPS: ${RATE_LIMIT_PROXY_HOPS:-1}
+
+      # Kafka endpoints are intentionally absent: nothing consumes these events yet, so
+      # publishing disables itself with a startup ERROR and a dropped-event counter.
+      # Requires the change on fix/kafka-optional-broker; before that, prod demands them.
+
+      # A t3.micro has 1 GB. Without this the JVM sizes its heap against the host and
+      # gets OOM-killed under load.
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=55"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+      # Restricts envsubst to API_DOMAIN alone. Without it, envsubst also substitutes
+      # nginx's own $$host, $$uri and $$proxy_add_x_forwarded_for with empty strings —
+      # which breaks proxying and, less obviously, the client-IP header the rate limiter
+      # reads. The config would still load; it would just be wrong.
+      NGINX_ENVSUBST_FILTER: "API_DOMAIN"
+    volumes:
+      # Mounted as a template, not a conf: the image renders /etc/nginx/templates/*.template
+      # into /etc/nginx/conf.d/ at start, substituting API_DOMAIN.
+      - ./nginx/prod.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    depends_on:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
