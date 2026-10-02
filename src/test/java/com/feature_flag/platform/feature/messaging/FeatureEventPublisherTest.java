@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -70,7 +71,39 @@ class FeatureEventPublisherTest {
     }
 
     private FeatureEventPublisher publisherOn(Executor executor) {
-        return new FeatureEventPublisher(kafka, TOPIC, executor);
+        return new FeatureEventPublisher(kafka, TOPIC, "localhost:9092", true, executor);
+    }
+
+    /**
+     * A deployment with no broker configured must still start and still serve flag changes.
+     *
+     * <p>prod and staging briefly made the Kafka endpoints mandatory, which meant a missing broker
+     * stopped the whole application from booting — taking down the read paths SDKs depend on in order
+     * to protect a channel that currently has no consumer at all. Publishing is disabled instead, and
+     * the loss stays counted and logged so it cannot pass unnoticed.
+     */
+    @Test
+    void withNoBrokerConfigured_publishingIsDisabledAndTheEventIsCountedAsLost() {
+        FeatureEventPublisher publisher =
+                new FeatureEventPublisher(kafka, TOPIC, "  ", true, sameThread());
+
+        publisher.publish(event());
+
+        verifyNoInteractions(kafka);
+        assertThat(publisher.getDroppedEventCount()).isEqualTo(1);
+        assertThat(eventsAt(logs, Level.ERROR)).isNotEmpty();
+    }
+
+    /** The explicit off switch behaves the same way, even when a broker address is present. */
+    @Test
+    void whenDisabledByProperty_nothingIsPublishedEvenThoughABrokerIsConfigured() {
+        FeatureEventPublisher publisher =
+                new FeatureEventPublisher(kafka, TOPIC, "localhost:9092", false, sameThread());
+
+        publisher.publish(event());
+
+        verifyNoInteractions(kafka);
+        assertThat(publisher.getDroppedEventCount()).isEqualTo(1);
     }
 
     /** Runs the task inline so the failure paths can be asserted deterministically. */
