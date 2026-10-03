@@ -184,8 +184,11 @@ class TenantDeletionCascadeIntegrationTest {
                 .email(prefix + "-invitee@test.com").tokenHash(prefix + "-invite-hash")
                 .role(RoleName.MEMBER).tenant(tenant).invitedBy(owner)
                 .status(InvitationStatus.PENDING).expiresAt(Instant.now().plusSeconds(3600)).build());
+        // Scoped to an env, so this row also pins that api_keys are deleted before the envs they
+        // reference — the reverse order leaves the cascade failing on a foreign key.
         apiKeyRepository.save(ApiKey.builder()
-                .tenant(tenant).name(prefix + "-ci").keyHash(prefix + "-key-hash").build());
+                .tenant(tenant).env(envs.get(0)).name(prefix + "-ci")
+                .keyHash(prefix + "-key-hash").prefix("ffsdk_" + prefix).build());
 
         // Logging in writes one of these per session, so a real tenant always has some.
         RefreshToken rotated = refreshTokenRepository.save(RefreshToken.builder()

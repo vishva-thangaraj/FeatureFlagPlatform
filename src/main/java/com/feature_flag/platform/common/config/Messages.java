@@ -76,4 +76,10 @@ public final class Messages {
     public static final String FEATURE_RULE_DUPLICATE_ATTRIBUTE = "feature.rule.duplicate.attribute";
     public static final String FEATURE_RULE_VALUE_TYPE_MISMATCH = "feature.rule.value.type.mismatch";
     public static final String RESOURCE_FEATURE_OVERRIDE_NOT_FOUND = "resource.feature.override.not.found";
+
+    // API keys
+    public static final String API_KEY_INVALID = "api.key.invalid";
+    public static final String API_KEY_AMBIGUOUS_CREDENTIALS = "api.key.ambiguous.credentials";
+    public static final String API_KEY_EXPIRY_IN_PAST = "api.key.expiry.in.past";
+    public static final String RESOURCE_API_KEY_NOT_FOUND = "resource.api.key.not.found";
 }

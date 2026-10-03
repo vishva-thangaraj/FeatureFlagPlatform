@@ -1,7 +1,9 @@
 package com.feature_flag.platform.common.config;
 
+import com.feature_flag.platform.common.security.ApiKeyPrincipal;
 import com.feature_flag.platform.common.security.JwtAuthenticationFilter;
 import com.feature_flag.platform.common.security.config.PublicEndpoints;
+import com.feature_flag.platform.common.security.filter.ApiKeyAuthenticationFilter;
 import com.feature_flag.platform.common.security.filter.FilterChainExceptionHandler;
 import com.feature_flag.platform.common.security.filter.ParamValidationFilter;
 import com.feature_flag.platform.common.security.filter.RateLimitFilter;
@@ -27,6 +29,7 @@ public class SecurityConfig {
 
     private final FilterChainExceptionHandler filterChainExceptionHandler;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final ApiKeyAuthenticationFilter apiKeyAuthenticationFilter;
     private final RateLimitFilter rateLimitFilter;
     private final TenantContextFilter tenantContextFilter;
     private final RoleAuthorizationFilter roleAuthorizationFilter;
@@ -34,12 +37,14 @@ public class SecurityConfig {
 
     public SecurityConfig(FilterChainExceptionHandler filterChainExceptionHandler,
                           JwtAuthenticationFilter jwtAuthenticationFilter,
+                          ApiKeyAuthenticationFilter apiKeyAuthenticationFilter,
                           RateLimitFilter rateLimitFilter,
                           TenantContextFilter tenantContextFilter,
                           RoleAuthorizationFilter roleAuthorizationFilter,
                           ParamValidationFilter paramValidationFilter) {
         this.filterChainExceptionHandler = filterChainExceptionHandler;
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.apiKeyAuthenticationFilter = apiKeyAuthenticationFilter;
         this.rateLimitFilter = rateLimitFilter;
         this.tenantContextFilter = tenantContextFilter;
         this.roleAuthorizationFilter = roleAuthorizationFilter;
@@ -57,6 +62,13 @@ public class SecurityConfig {
                         // Cross-checked against api-security.json's authRequired flags at startup by
                         // PublicEndpointPolicyValidator, so the two declarations cannot drift apart.
                         .requestMatchers(PublicEndpoints.patterns()).permitAll()
+                        // The SDK surface takes keys and nothing else. Authenticated is not enough:
+                        // these controllers read an ApiKeyPrincipal, so a dashboard token satisfying
+                        // anyRequest().authenticated() would reach one and fail on a principal of the
+                        // wrong type — a 500 where a refusal belongs. Stated once here rather than as a
+                        // null check every SDK controller has to remember.
+                        .requestMatchers(ApiKeyAuthenticationFilter.SDK_PATH_PREFIX + "**")
+                        .hasAuthority(ApiKeyPrincipal.AUTHORITY)
                         .anyRequest().authenticated()
                 )
 
@@ -75,6 +87,11 @@ public class SecurityConfig {
 
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
 
+                // The SDK's credential. Only ever authenticates requests under /api/v1/sdk/, and must
+                // precede RateLimitFilter so a key gets its own bucket instead of sharing its egress
+                // address with every other SDK instance behind it.
+                .addFilterAfter(apiKeyAuthenticationFilter, JwtAuthenticationFilter.class)
+
                 // AFTER authentication, so an authenticated caller is throttled as a caller rather than as
                 // an IP address (see RateLimitFilter#resolveClientKey), and BEFORE TenantContextFilter, so
                 // a throttled request is rejected before it costs a membership lookup in the database.
@@ -85,7 +102,7 @@ public class SecurityConfig {
                 // work at all and their per-IP brute-force limits from api-security.json apply exactly as
                 // before - and elsewhere it is one HMAC against a request that is still refused before any
                 // database work.
-                .addFilterAfter(rateLimitFilter, JwtAuthenticationFilter.class)
+                .addFilterAfter(rateLimitFilter, ApiKeyAuthenticationFilter.class)
 
                 // Tenant scope must be resolved before roles are checked, so RoleAuthorizationFilter
                 // evaluates the target tenant's roles rather than the token's default tenant.
@@ -120,6 +137,12 @@ public class SecurityConfig {
     @Bean
     public FilterRegistrationBean<JwtAuthenticationFilter> disableJwtAuthenticationFilterRegistration(
             JwtAuthenticationFilter filter) {
+        return chainOnly(filter);
+    }
+
+    @Bean
+    public FilterRegistrationBean<ApiKeyAuthenticationFilter> disableApiKeyAuthenticationFilterRegistration(
+            ApiKeyAuthenticationFilter filter) {
         return chainOnly(filter);
     }
 

@@ -1,5 +1,6 @@
 package com.feature_flag.platform.common.security.filter;
 
+import com.feature_flag.platform.common.security.ApiKeyPrincipal;
 import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.common.security.config.ApiSecurityConfigLoader;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -437,6 +438,32 @@ class RateLimitFilterTest {
         assertEquals(LOGIN_BURST, allowedOf(filter, "POST", LOGIN, REAL_CLIENT, i -> null, 40));
 
         assertEquals(2, filter.bucketCount(), "one bucket per user, not one per address");
+    }
+
+    /** An SDK key is a caller in its own right: every instance behind one egress is not one caller. */
+    @Test
+    void sdkKeys_areThrottledPerKeyRatherThanPerAddress() throws Exception {
+        RateLimitFilter filter = noProxyFilter();
+
+        authenticateAsApiKey(100L);
+        int allowed = 0;
+        for (int i = 0; i < 40; i++) {
+            if (send(filter, "POST", LOGIN, "203.0.113." + i, null) == 200) {
+                allowed++;
+            }
+        }
+        assertEquals(LOGIN_BURST, allowed, "one key, one allowance, however many addresses it calls from");
+
+        // A second key from the same address starts with its own allowance.
+        authenticateAsApiKey(200L);
+        assertEquals(LOGIN_BURST, allowedOf(filter, "POST", LOGIN, REAL_CLIENT, i -> null, 40));
+        assertEquals(2, filter.bucketCount(), "one bucket per key");
+    }
+
+    private void authenticateAsApiKey(long apiKeyId) {
+        ApiKeyPrincipal principal = new ApiKeyPrincipal(apiKeyId, 1L, 2L, "production", "ffsdk_abc123");
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
     }
 
     /**

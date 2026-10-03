@@ -77,6 +77,14 @@ public class TenantContextFilter extends OncePerRequestFilter {
      */
     private static final String INVITATION_TOKEN_PATH_PREFIX = "/api/v1/invitations/";
 
+    /**
+     * The SDK surface, authenticated by API key. The key names its own tenant, and there is no user and
+     * therefore no membership to resolve. Stated here rather than left to the fact that an
+     * {@code ApiKeyPrincipal} is not a {@code TenantUserDetails} and so falls through below: a bypass of
+     * the filter that closed the cross-tenant IDOR should be written down, not inferred.
+     */
+    private static final String SDK_PATH_PREFIX = ApiKeyAuthenticationFilter.SDK_PATH_PREFIX;
+
     private final TenantMembershipResolver tenantMembershipResolver;
     private final FilterErrorWriter errorWriter;
 
@@ -89,7 +97,9 @@ public class TenantContextFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = requestPath(request);
-        return TENANT_LESS_PATHS.contains(path) || path.startsWith(INVITATION_TOKEN_PATH_PREFIX);
+        return TENANT_LESS_PATHS.contains(path)
+                || path.startsWith(INVITATION_TOKEN_PATH_PREFIX)
+                || path.startsWith(SDK_PATH_PREFIX);
     }
 
     /**

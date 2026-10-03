@@ -1,5 +1,6 @@
 package com.feature_flag.platform.common.security.filter;
 
+import com.feature_flag.platform.common.security.ApiKeyPrincipal;
 import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.common.security.config.ApiSecurityConfigLoader;
 import com.feature_flag.platform.common.security.config.EndpointSecurityRule;
@@ -226,6 +227,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (auth != null && auth.getPrincipal() instanceof TenantUserDetails userDetails
                 && userDetails.getUserId() != null) {
             return "user:" + userDetails.getUserId();
+        }
+        // An SDK is throttled as a key. Keyed on the address instead, every instance of a customer's
+        // application behind one egress would share a single allowance.
+        if (auth != null && auth.getPrincipal() instanceof ApiKeyPrincipal apiKey) {
+            return "apikey:" + apiKey.getApiKeyId();
         }
         return "ip:" + resolveClientIp(request);
     }

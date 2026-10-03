@@ -9,7 +9,7 @@ import java.util.Collection;
 import java.util.List;
 
 @Getter
-public class TenantUserDetails implements UserDetails {
+public class TenantUserDetails implements UserDetails, TenantScopedPrincipal {
 
     private final Long userId;
     private final String email;
