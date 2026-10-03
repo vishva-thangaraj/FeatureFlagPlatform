@@ -419,6 +419,46 @@
       "roles": [],
       "throttle": { "requestsPerMinute": 120, "burstSize": 20 },
       "allowedParams": ["envName"]
+    },
+    {
+      "path": "/api/v1/api-keys",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": { "requestsPerMinute": 20, "burstSize": 5 },
+      "allowedParams": ["name", "envName", "expiresAt"]
+    },
+    {
+      "path": "/api/v1/api-keys",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 60, "burstSize": 10 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/api-keys/*",
+      "method": "DELETE",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": { "requestsPerMinute": 20, "burstSize": 5 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/sdk/config",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 120, "burstSize": 20 },
+      "allowedParams": []
+    },
+    {
+      "path": "/api/v1/sdk/config/*",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": { "requestsPerMinute": 120, "burstSize": 20 },
+      "allowedParams": []
     }
   ]
 }

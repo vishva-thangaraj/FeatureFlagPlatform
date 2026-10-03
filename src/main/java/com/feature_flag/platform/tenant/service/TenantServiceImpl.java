@@ -228,11 +228,13 @@ public class TenantServiceImpl implements TenantService {
         int overrides = featureUserOverrideRepository.deleteAllByTenantId(tenantId);
         int statuses = featureEnvStatusRepository.deleteAllByTenantId(tenantId);
         int features = featureRepository.deleteAllByTenantId(tenantId);
+
+        // Before the envs: API keys are scoped to one, so they hold a foreign key into it.
+        int apiKeys = apiKeyRepository.deleteAllByTenantId(tenantId);
         int envs = envRepository.deleteAllByTenantId(tenantId);
 
         // Leaves of the tenant itself.
         int invitations = userInvitationRepository.deleteAllByTenantId(tenantId);
-        int apiKeys = apiKeyRepository.deleteAllByTenantId(tenantId);
 
         // Sessions: break the rotation chain before the rows go, so the self-FK cannot decide the outcome.
         refreshTokenRepository.detachReplacementChainsByTenantId(tenantId);

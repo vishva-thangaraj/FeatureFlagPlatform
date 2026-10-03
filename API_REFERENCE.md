@@ -9,11 +9,23 @@
 
 ## Authentication
 
-All protected endpoints require a JWT access token in the `Authorization` header:
+There are two credentials, and they are not interchangeable.
+
+**Dashboard callers** (web, mobile, CLI acting as a person) send a JWT access token:
 
 ```
 Authorization: Bearer <accessToken>
 ```
+
+**SDKs** send an API key, and may only reach `/api/v1/sdk/`:
+
+```
+X-API-Key: ffsdk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+A key is refused anywhere outside `/api/v1/sdk/`, and a user token is refused inside it. Sending both
+on one request is refused outright rather than one silently taking precedence. See
+[API keys](#api-keys-apiv1api-keys) and [SDK config](#sdk-config-apiv1sdkconfig).
 
 - Access tokens expire in **15 minutes**.
 - Refresh tokens expire in **7 days** and are single-use (rotated on each refresh).
@@ -91,9 +103,9 @@ Validation errors (400) include field-level details in the `message` field.
 
 ## Endpoints
 
-### Auth (`/api/auth`)
+### Auth (`/api/v1/auth`)
 
-#### `POST /api/auth/register` (Public)
+#### `POST /api/v1/auth/register` (Public)
 
 Register a new user account.
 
@@ -140,7 +152,7 @@ Register a new user account.
 
 ---
 
-#### `POST /api/auth/login` (Public)
+#### `POST /api/v1/auth/login` (Public)
 
 Authenticate an existing user.
 
@@ -176,7 +188,7 @@ Authenticate an existing user.
 
 ---
 
-#### `POST /api/auth/refresh` (Public)
+#### `POST /api/v1/auth/refresh` (Public)
 
 Rotate a refresh token and get new access + refresh tokens.
 
@@ -203,7 +215,7 @@ Rotate a refresh token and get new access + refresh tokens.
 
 ---
 
-#### `POST /api/auth/logout` (Public)
+#### `POST /api/v1/auth/logout` (Protected)
 
 Revoke a refresh token.
 
@@ -225,7 +237,7 @@ Revoke a refresh token.
 
 ---
 
-#### `POST /api/auth/switchtenant` (Protected)
+#### `POST /api/v1/auth/switch-tenant` (Protected)
 
 Switch the authenticated user's tenant context.
 
@@ -443,15 +455,21 @@ differs only by case — is a `400`, not a `500`.
 
 ### Invitations (`/api/v1/invitations`)
 
-#### `GET /api/v1/invitations/accept?token=<token>` (Public)
+Three token-addressed endpoints. The token is a **path segment**, not a query parameter, and
+accepting is a `POST` — it creates a membership.
+
+- `GET /api/v1/invitations/{inviteToken}` (Public) — read an invitation before acting on it.
+- `POST /api/v1/invitations/{inviteToken}/accept` (Public)
+- `POST /api/v1/invitations/{inviteToken}/decline` (Public)
+
+"Public" here is the absence of a check, not a decision that anyone may accept: an invitee with no
+account yet has no credentials to present. A request from an *already registered* invitee is
+authorized against the authenticated principal, so a third party holding the token cannot accept on
+their behalf.
+
+#### `POST /api/v1/invitations/{inviteToken}/accept` (Public)
 
 Accept an invitation using the token from the email link.
-
-**Query Parameters:**
-
-| Param   | Type   | Required | Description              |
-|---------|--------|----------|--------------------------|
-| `token` | String | Yes      | Raw invitation token     |
 
 **Response:** `200 OK`
 
@@ -584,9 +602,9 @@ Per-user allow/deny list keyed by the customer's own external user id. Writes re
 Returns the flag/targeting **array** for an environment. **The platform does not evaluate flags** —
 the SDK computes on/off from this payload. Supports `ETag`/`If-None-Match` → `304 Not Modified`.
 
-> These currently sit behind the dashboard user JWT. **API-key authentication is required before a
-> real SDK can use them**: an SDK shipped to a client cannot hold a user's credentials, so API-key
-> authentication is a prerequisite. Usable today only for the dashboard's own preview.
+> This is the **dashboard's** view of the config, behind the user JWT, and it names the environment in
+> the query string. An SDK uses [`/api/v1/sdk/config`](#sdk-config-apiv1sdkconfig) instead, where the
+> environment comes from the key rather than from the caller.
 
 #### `GET /api/v1/config?envName=prod` (Protected)
 
@@ -622,6 +640,108 @@ returns a decision, only this config.
 
 ---
 
+### API Keys (`/api/v1/api-keys`)
+
+Dashboard endpoints, behind the user JWT, for the credentials SDKs use. Scoped to the acting tenant.
+
+A key is bound to **one environment** and cannot be repointed. That is the whole reason the scope
+exists: a production key shipped inside a customer's application must not be able to read the staging
+configuration, which carries unreleased feature keys and targeting rules naming real users.
+
+#### `POST /api/v1/api-keys` (OWNER/ADMIN)
+
+```json
+{ "name": "checkout-service prod", "envName": "production", "expiresAt": "2027-01-01T00:00:00Z" }
+```
+
+`expiresAt` is optional and must be in the future. `404` if the tenant has no environment of that name.
+
+**Response `201`** — the only response that ever contains the key:
+
+```json
+{
+  "apiKey": {
+    "id": "894079602110607473",
+    "name": "checkout-service prod",
+    "envName": "production",
+    "prefix": "ffsdk_7fQa2L",
+    "createdAt": "2026-10-03T09:00:00Z",
+    "lastUsedAt": null,
+    "expiresAt": "2027-01-01T00:00:00Z",
+    "revokedAt": null
+  },
+  "key": "ffsdk_7fQa2LnV9xK3mPd8sR1tY6wB4eH0jC5uZ2gN7qXaF1o"
+}
+```
+
+Only the key's SHA-256 digest is stored, so `key` cannot be recovered afterwards. Losing it means
+issuing a new one. `id` is a **string**: it is a TSID, past the point where a JavaScript `Number` is
+exact, and a rounded id is not the id of any key.
+
+#### `GET /api/v1/api-keys` (Protected)
+
+```json
+{ "apiKeys": [ { "id": "894...", "name": "checkout-service prod", "envName": "production",
+                 "prefix": "ffsdk_7fQa2L", "createdAt": "2026-10-03T09:00:00Z",
+                 "lastUsedAt": "2026-10-03T11:42:00Z", "expiresAt": null, "revokedAt": null } ] }
+```
+
+Newest first, never the key itself. `lastUsedAt` is written at most once every five minutes per key, so
+treat it as "used around then", not as a request log.
+
+#### `DELETE /api/v1/api-keys/{apiKeyId}` (OWNER/ADMIN)
+
+`204 No Content`. Revocation takes effect on the next request — there is no cache to wait out. The row
+is kept, with `revokedAt` set, so a revoked key stays in the audit trail.
+
+Idempotent: revoking an already-revoked key is `204`, not an error. The caller wanted the key dead and
+it is. `404` for an id belonging to another tenant, which is also what makes a key id useless to guess.
+
+---
+
+### SDK Config (`/api/v1/sdk/config`)
+
+The same payload as [`/api/v1/config`](#client-config-apiv1config--sdk-facing), authenticated by
+`X-API-Key`. **The platform does not evaluate flags** — the SDK computes on/off from this payload.
+
+There is **no `envName` parameter**. The tenant and the environment both come from the key, so neither
+is the caller's to choose; an `envName` sent here is ignored rather than honoured. `X-Tenant-Id` is
+likewise ignored.
+
+#### `GET /api/v1/sdk/config`
+
+Every flag in the key's environment. Same body as `GET /api/v1/config?envName=...`.
+
+#### `GET /api/v1/sdk/config/{featureKey}`
+
+One flag. `404` if that feature is not configured for the key's environment.
+
+**Caching.** Both support `ETag` / `If-None-Match` → `304 Not Modified`, which is what makes polling
+cheap. Responses carry `Cache-Control: no-cache, private`:
+
+- `private` — one tenant's unreleased configuration must never sit in a shared cache.
+- `no-cache` is *not* "do not store". It means store it and revalidate before reuse, which is exactly
+  the conditional-request loop an SDK runs. `no-store` would forbid the client cache that makes the
+  `304` worth having.
+
+The ETag includes the environment, because this URL does not name one.
+
+**Failure modes an SDK must distinguish:**
+
+| Status | Meaning | What the SDK should do |
+|--------|---------|------------------------|
+| `200`  | Fresh config | Replace the cached config |
+| `304`  | Unchanged | Keep the cached config; this is the normal answer |
+| `401`  | Key unknown, revoked or expired | **Stop polling** and surface it; retrying cannot help |
+| `403`  | No key sent, or a user token sent instead | A configuration error, not a transient one |
+| `429`  | Throttled (120 req/min per key, burst 20) | Back off and retry |
+| `404`  | No such feature in this environment | Fall back to the built-in default |
+
+`401` and `429` are deliberately different answers. A key that has been revoked is not a condition
+retrying fixes, and an SDK that treats it as one turns one revocation into a retry storm.
+
+---
+
 ## Enums
 
 | Enum             | Values                                          |
@@ -629,8 +749,8 @@ returns a decision, only this config.
 | TenantPlan       | `FREE`, `PRO`, `ENTERPRISE`                     |
 | UserStatus       | `ACTIVE`, `INACTIVE`, `SUSPENDED`               |
 | MembershipStatus | `ACTIVE`, `INVITED`, `REMOVED`                  |
-| RoleName         | `OWNER`, `ADMIN`, `MEMBER`, `VIEWER`, `SUPER_ADMIN` |
-| InvitationStatus | `PENDING`, `ACCEPTED`, `VALIDATED`, `EXPIRED`, `CANCELLED` |
+| RoleName         | `OWNER`, `ADMIN`, `MEMBER`, `VIEWER`            |
+| InvitationStatus | `PENDING`, `PENDING_UNREGISTERED`, `ACCEPTED`, `VALIDATED`, `DECLINED`, `EXPIRED`, `CANCELLED` |
 | RuleOperator     | `EQUALS`, `NOT_EQUALS`, `IN`, `NOT_IN`, `GT`, `GTE`, `LT`, `LTE`, `CONTAINS`, `STARTS_WITH`, `ENDS_WITH`, `SEMVER_GT`, `SEMVER_GTE`, `SEMVER_LT`, `SEMVER_LTE` |
 | RuleValueType    | `STRING`, `NUMBER`, `BOOLEAN`, `SEMVER`         |
 
@@ -641,29 +761,29 @@ returns a decision, only this config.
 ### 1. Registration + Tenant Creation
 
 ```
-POST /api/auth/register       --> get accessToken (no tenant context)
+POST /api/v1/auth/register    --> get accessToken (no tenant context)
 POST /api/v1/tenants          --> create tenant, user becomes OWNER
-POST /api/auth/refresh        --> refresh to get token with tenant context & roles
+POST /api/v1/auth/refresh     --> refresh to get token with tenant context & roles
 ```
 
 ### 2. Login (with tenant)
 
 ```
-POST /api/auth/login { tenantId: 123 }  --> accessToken with tenant context
+POST /api/v1/auth/login { tenantId: 123 }  --> accessToken with tenant context
 ```
 
 ### 3. Login (without tenant) + Switch
 
 ```
-POST /api/auth/login {}                    --> accessToken (first membership or no tenant)
+POST /api/v1/auth/login {}                     --> accessToken (first membership or no tenant)
 GET  /api/v1/tenants                       --> list user's tenants
-POST /api/auth/switchtenant { tenantId: X } --> new accessToken for chosen tenant
+POST /api/v1/auth/switch-tenant { tenantId: X } --> new accessToken for chosen tenant
 ```
 
 ### 4. Token Refresh
 
 ```
-POST /api/auth/refresh { refreshToken: "..." }  --> new accessToken + refreshToken
+POST /api/v1/auth/refresh { refreshToken: "..." }  --> new accessToken + refreshToken
 ```
 
 ### 5. Invite User
@@ -678,7 +798,7 @@ The email contains a link to the **client app**: `http://localhost:3000/invitati
 
 ```
 1. Client extracts `token` from query params
-2. Client calls: GET /api/v1/invitations/accept?token=<token>
+2. Client calls: POST /api/v1/invitations/<token>/accept
 3. Check response:
    a. If registered=true  --> invitation accepted, membership created
       - If user is logged in  --> redirect to tenant dashboard
@@ -689,10 +809,28 @@ The email contains a link to the **client app**: `http://localhost:3000/invitati
 4. On error (401/409) --> show appropriate error message
 ```
 
-### 6. Logout
+### 6. SDK integration
 
 ```
-POST /api/auth/logout { refreshToken: "..." }  --> revokes token
+POST /api/v1/api-keys { name, envName }   --> the key, once, in the response body
+                                              (store it; only its digest is kept)
+
+GET  /api/v1/sdk/config                   --> every flag in the key's environment
+     X-API-Key: ffsdk_...                     + an ETag
+
+GET  /api/v1/sdk/config                   --> 304 Not Modified, no body
+     X-API-Key: ffsdk_...                     (the steady state: poll conditionally)
+     If-None-Match: "<etag>"
+```
+
+Rotation is issue -> deploy -> revoke, in that order: revocation takes effect on the next request, so
+revoking before the replacement is live is an immediate outage. The full procedure, the status codes
+an SDK must tell apart, and working curl are in [docs/sdk-quickstart.md](docs/sdk-quickstart.md).
+
+### 7. Logout
+
+```
+POST /api/v1/auth/logout { refreshToken: "..." }  --> revokes token
 ```
 
 ---

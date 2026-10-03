@@ -61,10 +61,14 @@ public class FlagConfigController {
      * The tenant is part of the ETag, and {@code Vary} names the tenant header: the same URL now returns
      * different bodies per tenant, so an ETag derived from the timestamp alone would collide across
      * tenants and any shared cache would need to key on the header.
+     *
+     * <p>The environment is not in the tag because it is in the URL — {@code ?envName=} — so a cache
+     * never compares the tag of one environment against another's. The SDK path, where the key carries
+     * the environment instead, needs it in the tag; see {@link SdkConfigController}.
      */
     private <T> ResponseEntity<T> withEtag(Long tenantId, Instant lastModified, String ifNoneMatch, T body) {
-        String etag = "\"" + tenantId + "-" + (lastModified == null ? 0L : lastModified.toEpochMilli()) + "\"";
-        if (matches(ifNoneMatch, etag)) {
+        String etag = ConfigETag.of(tenantId, lastModified);
+        if (ConfigETag.matches(ifNoneMatch, etag)) {
             return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
                     .eTag(etag)
                     .header(HttpHeaders.VARY, TenantContextFilter.TENANT_HEADER)
@@ -74,37 +78,5 @@ public class FlagConfigController {
                 .eTag(etag)
                 .header(HttpHeaders.VARY, TenantContextFilter.TENANT_HEADER)
                 .body(body);
-    }
-
-    /**
-     * {@code If-None-Match} per RFC 7232 §3.2: a comma-separated list of entity tags, or {@code *},
-     * compared with the <em>weak</em> comparison function — {@code W/"x"} and {@code "x"} match.
-     *
-     * <p>A plain {@code equals} against the raw header missed all of it: {@code W/"42-1"} sent by a
-     * proxy that weakened the validator, a client listing several cached tags, and {@code *}. Spring's
-     * own conditional-request check in {@code HttpEntityMethodProcessor} happens to catch the first
-     * two on the way out, so the only visible symptom was {@code *} — but a 304 decision this method
-     * takes explicitly should be right on its own terms, not right by accident downstream.
-     */
-    private boolean matches(String ifNoneMatch, String etag) {
-        if (ifNoneMatch == null || ifNoneMatch.isBlank()) {
-            return false;
-        }
-        String header = ifNoneMatch.trim();
-        if ("*".equals(header)) {
-            return true;
-        }
-        for (String candidate : header.split(",")) {
-            if (opaqueTag(candidate).equals(opaqueTag(etag))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Strips surrounding whitespace and the weak-validator {@code W/} prefix. */
-    private String opaqueTag(String tag) {
-        String trimmed = tag.trim();
-        return trimmed.startsWith("W/") ? trimmed.substring(2).trim() : trimmed;
     }
 }

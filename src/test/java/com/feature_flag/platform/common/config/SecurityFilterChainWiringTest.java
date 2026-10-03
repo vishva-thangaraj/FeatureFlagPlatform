@@ -1,6 +1,7 @@
 package com.feature_flag.platform.common.config;
 
 import com.feature_flag.platform.common.security.JwtAuthenticationFilter;
+import com.feature_flag.platform.common.security.filter.ApiKeyAuthenticationFilter;
 import com.feature_flag.platform.common.security.filter.FilterChainExceptionHandler;
 import com.feature_flag.platform.common.security.filter.ParamValidationFilter;
 import com.feature_flag.platform.common.security.filter.RateLimitFilter;
@@ -48,6 +49,7 @@ class SecurityFilterChainWiringTest {
     private static final List<Class<? extends Filter>> CHAIN_ORDER = List.of(
             FilterChainExceptionHandler.class,
             JwtAuthenticationFilter.class,
+            ApiKeyAuthenticationFilter.class,
             RateLimitFilter.class,
             TenantContextFilter.class,
             RoleAuthorizationFilter.class,
@@ -122,7 +124,8 @@ class SecurityFilterChainWiringTest {
                 .as("every filter must actually be in the chain; chain is %s", actual)
                 .doesNotContain(-1);
         assertThat(positions)
-                .as("rate limiting must come after authentication (so it can key on the user) and before"
+                .as("rate limiting must come after both authentication filters (so it can key on the user"
+                        + " or the API key) and before"
                         + " tenant resolution (so a throttled request costs no database work); role checks"
                         + " must come after tenant resolution. Chain is %s", actual)
                 .isSorted();
