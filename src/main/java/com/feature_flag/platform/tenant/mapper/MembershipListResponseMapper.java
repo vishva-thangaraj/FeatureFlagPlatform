@@ -29,12 +29,12 @@ public class MembershipListResponseMapper {
         Set<Role> roles = membership.getRoles() == null ? Collections.emptySet() : membership.getRoles();
 
         List<RoleResponse> roleResponses = roles.stream()
-                .map(role -> new RoleResponse(role.getId(), role.getName()))
+                .map(role -> new RoleResponse(String.valueOf(role.getId()), role.getName()))
                 .toList();
 
         return new MemberResponse(
-                membership.getId(),
-                user.getId(),
+                String.valueOf(membership.getId()),
+                String.valueOf(user.getId()),
                 user.getFirstName(),
                 user.getLastName(),
                 roleResponses,

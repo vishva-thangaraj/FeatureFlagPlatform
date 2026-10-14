@@ -55,7 +55,10 @@ public class JwtTokenProvider {
                 .setExpiration(expiry);
 
         if (tenantId != null) {
-            builder.claim("tenantId", tenantId);
+            // Written as a string, not a number: a TSID is ~4.6e17 and a JavaScript Number is exact only
+            // to 2^53, so any browser that decodes this token to read its own tenant would read a rounded
+            // id that belongs to no tenant. JwtAuthenticationFilter still accepts either form.
+            builder.claim("tenantId", tenantId.toString());
         }
         builder.claim("roles", roles != null ? roles : Collections.emptyList());
 

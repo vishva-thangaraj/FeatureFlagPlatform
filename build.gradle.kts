@@ -44,6 +44,11 @@ dependencies {
 	implementation("io.confluent:kafka-avro-serializer:7.7.1")
 	implementation("org.springframework.kafka:spring-kafka")
 	implementation("org.springframework.boot:spring-boot-starter-websocket")
+	// OpenAPI description of the REST surface, served only under the dev and docker profiles
+	// (see OpenApiConfig and springdoc.api-docs.enabled). The dashboard generates its TypeScript
+	// types from /v3/api-docs, so a contract change becomes a compile error in the client rather
+	// than a bug report.
+	implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.9")
 	testImplementation("org.springframework.kafka:spring-kafka-test")
 	testImplementation("org.testcontainers:kafka")
 	testImplementation("org.testcontainers:junit-jupiter")

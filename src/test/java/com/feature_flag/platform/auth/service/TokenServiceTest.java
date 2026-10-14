@@ -86,7 +86,7 @@ class TokenServiceTest {
         when(jwtProperties.getAccessTokenExpirationMs()).thenReturn(900_000L);
         when(refreshTokenRepository.save(any(RefreshToken.class))).thenAnswer(inv -> inv.getArgument(0));
         when(authMapper.toAuthResponse(any(), any(), any(), any(), any(), anyLong()))
-                .thenReturn(new AuthResponse("access-token", "new-refresh-token", 1L, "user@test.com", 100L, java.util.List.of("OWNER"), 900_000L));
+                .thenReturn(new AuthResponse("access-token", "new-refresh-token", "1", "user@test.com", "100", java.util.List.of("OWNER"), 900_000L));
     }
 
     @AfterEach

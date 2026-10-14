@@ -15,9 +15,9 @@ public class AuthMapper {
         return new AuthResponse(
                 accessToken,
                 refreshToken,
-                user.getId(),
+                String.valueOf(user.getId()),
                 user.getEmail(),
-                tenant != null ? tenant.getId() : null,
+                tenant != null ? String.valueOf(tenant.getId()) : null,
                 roles,
                 expiresIn
         );

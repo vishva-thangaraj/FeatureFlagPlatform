@@ -15,7 +15,7 @@ public class TenantMapper {
 
     public TenantResponse toTenantResponse(Tenant tenant, Collection<Role> roles) {
         List<RoleResponse> roleResponses = roles.stream()
-                .map(r -> new RoleResponse(r.getId(), r.getName()))
+                .map(r -> new RoleResponse(String.valueOf(r.getId()), r.getName()))
                 .toList();
         return new TenantResponse(tenant.getId().toString(), tenant.getName(), tenant.getPlan(), roleResponses);
     }
