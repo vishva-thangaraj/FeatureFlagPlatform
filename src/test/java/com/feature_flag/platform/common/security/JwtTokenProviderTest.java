@@ -37,12 +37,25 @@ class JwtTokenProviderTest {
 
         assertEquals("42", claims.getSubject());
         assertEquals("user@test.com", claims.get("email", String.class));
-        assertEquals(100, claims.get("tenantId", Integer.class));
+        assertEquals("100", claims.get("tenantId", String.class));
         @SuppressWarnings("unchecked")
         List<String> roles = claims.get("roles", List.class);
         assertEquals(List.of("OWNER", "ADMIN"), roles);
         assertNotNull(claims.getIssuedAt());
         assertNotNull(claims.getExpiration());
+    }
+
+    @Test
+    void generateAccessToken_writesTenantIdAsStringWithoutLosingPrecision() {
+        // A TSID is past 2^53, where a JavaScript Number stops being exact. Written as a JSON number the
+        // claim would be rounded by any browser that decoded the token, so it goes out as a string.
+        long tsid = 461168601842738689L;
+
+        String token = provider.generateAccessToken(42L, "user@test.com", tsid, List.of("OWNER"));
+        Claims claims = provider.parseAccessToken(token);
+
+        assertEquals("461168601842738689", claims.get("tenantId", String.class));
+        assertEquals(tsid, Long.parseLong(claims.get("tenantId", String.class)));
     }
 
     @Test

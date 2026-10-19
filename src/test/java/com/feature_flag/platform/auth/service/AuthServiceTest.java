@@ -88,8 +88,8 @@ class AuthServiceTest {
                 .user(testUser).tenant(testTenant).status(MembershipStatus.ACTIVE)
                 .roles(Set.of(ownerRole)).build(), 200L);
 
-        AuthResponse mockResponse = new AuthResponse("access-token", "refresh-token", 1L, "user@test.com", null, List.of(), 900_000L);
-        AuthResponse mockResponseWithTenant = new AuthResponse("access-token", "refresh-token", 1L, "user@test.com", 100L, List.of("OWNER"), 900_000L);
+        AuthResponse mockResponse = new AuthResponse("access-token", "refresh-token", "1", "user@test.com", null, List.of(), 900_000L);
+        AuthResponse mockResponseWithTenant = new AuthResponse("access-token", "refresh-token", "1", "user@test.com", "100", List.of("OWNER"), 900_000L);
         when(tokenService.createTokenPair(any(), isNull(), any())).thenReturn(mockResponse);
         when(tokenService.createTokenPair(any(), eq(testTenant), any())).thenReturn(mockResponseWithTenant);
         when(tenantMembershipResolver.roleNames(any())).thenReturn(List.of("OWNER"));
@@ -156,7 +156,7 @@ class AuthServiceTest {
 
             AuthResponse response = authService.login(request);
 
-            assertEquals(testTenant.getId(), response.tenantId());
+            assertEquals(String.valueOf(testTenant.getId()), response.tenantId());
             assertEquals(List.of("OWNER"), response.roles());
         }
 
@@ -260,7 +260,7 @@ class AuthServiceTest {
 
             AuthResponse response = authService.login(request);
 
-            assertEquals(100L, response.tenantId());
+            assertEquals("100", response.tenantId());
             verify(membershipRepository, never()).findByUserId(any());
         }
 
@@ -331,7 +331,7 @@ class AuthServiceTest {
 
             AuthResponse response = authService.login(request);
 
-            assertEquals(testTenant.getId(), response.tenantId());
+            assertEquals(String.valueOf(testTenant.getId()), response.tenantId());
         }
     }
 
@@ -345,7 +345,7 @@ class AuthServiceTest {
 
             AuthResponse response = authService.switchTenant(request, 1L);
 
-            assertEquals(100L, response.tenantId());
+            assertEquals("100", response.tenantId());
         }
 
         @Test

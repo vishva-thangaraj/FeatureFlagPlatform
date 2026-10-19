@@ -203,6 +203,47 @@ class ApiKeyManagementIntegrationTest {
                 .andExpect(jsonPath("$.apiKeys").isEmpty());
     }
 
+    // ------------------------------------------------------------------ deleting the environment under a key
+
+    /**
+     * ApiKey.env is {@code optional = false}, so a live key is a foreign key pointing at the environment.
+     * Before this check the delete reached the database and failed there; now it is refused with a status
+     * the caller can act on, and the message names the way out.
+     */
+    @Test
+    @DisplayName("an environment with a live key cannot be deleted")
+    void deletingAnEnvironmentWithLiveKeysIsRefused() throws Exception {
+        create(ownerToken, body("ci", "production", null), 201);
+        Env production = envRepository.findAll().stream()
+                .filter(e -> e.getName().equals("production")).findFirst().orElseThrow();
+
+        mockMvc.perform(authorized(delete("/api/v1/envs/{id}", production.getId()), ownerToken))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Revoke them")));
+
+        assertThat(envRepository.findById(production.getId())).isPresent();
+    }
+
+    /** Once the key is revoked it authenticates nothing, so it no longer stands in the way. */
+    @Test
+    @DisplayName("revoking the key frees the environment to be deleted")
+    void deletingAnEnvironmentAfterRevokingItsKeysSucceeds() throws Exception {
+        JsonNode created = create(ownerToken, body("ci", "production", null), 201);
+        String keyId = created.at("/apiKey/id").asText();
+        Env production = envRepository.findAll().stream()
+                .filter(e -> e.getName().equals("production")).findFirst().orElseThrow();
+
+        mockMvc.perform(authorized(delete("/api/v1/api-keys/{id}", keyId), ownerToken))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(authorized(delete("/api/v1/envs/{id}", production.getId()), ownerToken))
+                .andExpect(status().isNoContent());
+
+        assertThat(envRepository.findById(production.getId())).isEmpty();
+        assertThat(apiKeyRepository.findAll()).noneMatch(k -> k.getEnv() != null
+                && k.getEnv().getId().equals(production.getId()));
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private JsonNode create(String token, String json, int expectedStatus) throws Exception {
