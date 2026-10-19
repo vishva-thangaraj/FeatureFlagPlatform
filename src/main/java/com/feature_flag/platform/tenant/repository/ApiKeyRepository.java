@@ -65,4 +65,21 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Long> {
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("delete from ApiKey k where k.tenant.id = :tenantId")
     int deleteAllByTenantId(@Param("tenantId") Long tenantId);
+
+    /**
+     * Keys that still authenticate against this environment. Deleting the environment under them would
+     * break live SDK traffic with no warning, so {@code ENVService.deleteEnv} refuses while any exist.
+     * Expiry is not considered: an expired key stops working on its own, and counting it here would block
+     * the delete on a credential that is already inert.
+     */
+    long countByEnvIdAndRevokedAtIsNull(Long envId);
+
+    /**
+     * Environment-deletion cascade, for the revoked keys that remain once the check above has passed.
+     * {@code ApiKey.env} is {@code optional = false}, so these rows cannot be detached from the
+     * environment and have to go with it.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("delete from ApiKey k where k.env.id = :envId")
+    int deleteAllByEnvId(@Param("envId") Long envId);
 }

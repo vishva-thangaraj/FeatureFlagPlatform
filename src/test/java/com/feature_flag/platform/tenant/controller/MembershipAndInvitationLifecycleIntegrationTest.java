@@ -154,9 +154,9 @@ class MembershipAndInvitationLifecycleIntegrationTest {
         mockMvc.perform(as(get("/api/v1/members")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.members.length()").value(2))
-                .andExpect(jsonPath("$.members[?(@.membershipId == %d)]".formatted(removedMembership.getId()))
+                .andExpect(jsonPath("$.members[?(@.membershipId == '%s')]".formatted(removedMembership.getId()))
                         .isEmpty())
-                .andExpect(jsonPath("$.members[?(@.membershipId == %d)]".formatted(activeMembership.getId()))
+                .andExpect(jsonPath("$.members[?(@.membershipId == '%s')]".formatted(activeMembership.getId()))
                         .isNotEmpty());
     }
 

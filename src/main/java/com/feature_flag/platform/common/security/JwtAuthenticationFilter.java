@@ -85,7 +85,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
             Long userId = Long.parseLong(subject.trim());
             String email = claims.get("email", String.class);
-            Long tenantId = claims.get("tenantId", Long.class);
+            Long tenantId = tenantIdClaim(claims);
 
             @SuppressWarnings("unchecked")
             List<String> roles = claims.get("roles", List.class);
@@ -98,5 +98,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             log.debug("Rejecting a token whose claims are malformed: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Reads the tenant claim, accepting both the string JwtTokenProvider now writes and the JSON number
+     * it used to write.
+     *
+     * <p>Without the number branch, every access token issued before that change would fail to parse the
+     * moment this deploys, logging out every signed-in user rather than letting their tokens age out over
+     * the next 15 minutes. A malformed value still throws {@link NumberFormatException}, which the caller
+     * turns into a rejected token.
+     */
+    private Long tenantIdClaim(Claims claims) {
+        Object raw = claims.get("tenantId");
+        if (raw == null) {
+            return null;
+        }
+        if (raw instanceof Number number) {
+            return number.longValue();
+        }
+        String text = raw.toString().trim();
+        return text.isEmpty() ? null : Long.parseLong(text);
     }
 }

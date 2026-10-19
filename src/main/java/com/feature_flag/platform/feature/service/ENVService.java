@@ -16,6 +16,7 @@ import com.feature_flag.platform.feature.repository.FeatureEnvStatusRepository;
 import com.feature_flag.platform.feature.repository.FeatureRuleRepository;
 import com.feature_flag.platform.feature.repository.FeatureUserOverrideRepository;
 import com.feature_flag.platform.tenant.entity.Tenant;
+import com.feature_flag.platform.tenant.repository.ApiKeyRepository;
 import com.feature_flag.platform.tenant.repository.TenantRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,17 +30,20 @@ public class ENVService {
     private final FeatureEnvStatusRepository featureEnvStatusRepository;
     private final FeatureRuleRepository featureRuleRepository;
     private final FeatureUserOverrideRepository featureUserOverrideRepository;
+    private final ApiKeyRepository apiKeyRepository;
 
     public ENVService(EnvRepository envRepository,
                       TenantRepository tenantRepository,
                       FeatureEnvStatusRepository featureEnvStatusRepository,
                       FeatureRuleRepository featureRuleRepository,
-                      FeatureUserOverrideRepository featureUserOverrideRepository) {
+                      FeatureUserOverrideRepository featureUserOverrideRepository,
+                      ApiKeyRepository apiKeyRepository) {
         this.envRepository = envRepository;
         this.tenantRepository = tenantRepository;
         this.featureEnvStatusRepository = featureEnvStatusRepository;
         this.featureRuleRepository = featureRuleRepository;
         this.featureUserOverrideRepository = featureUserOverrideRepository;
+        this.apiKeyRepository = apiKeyRepository;
     }
 
     @Transactional
@@ -111,10 +115,28 @@ public class ENVService {
      * environment. The features themselves are untouched; only their configuration <em>in this
      * environment</em> goes. Clients polling {@code /api/v1/config?envName=} for the deleted name now
      * get 404 rather than a silently empty flag list.
+     *
+     * <p>API keys are the exception to that cascade, and the body says why: they are credentials in
+     * someone else's running system, not configuration of this one.
      */
     @Transactional
     public void deleteEnv(Long envId, Long tenantId) {
         Env env = findByIdAndTenant(envId, tenantId);
+
+        // API keys are scoped to one environment and are held by SDKs running in someone else's
+        // deployment, so this does NOT cascade the way the configuration rows below do. The argument that
+        // justified cascading those -- every environment that has been used has status rows, so refusing
+        // would make the endpoint unusable -- does not carry over: keys exist only where someone issued
+        // one deliberately, and there is already an endpoint to revoke them. Deleting the environment
+        // under a live key would stop a customer's SDK without warning and without an auditable act of
+        // revocation, so the delete is refused until the keys are revoked.
+        long liveKeys = apiKeyRepository.countByEnvIdAndRevokedAtIsNull(envId);
+        if (liveKeys > 0) {
+            throw new ConflictException(I18N.getMessage(Messages.ENV_HAS_ACTIVE_API_KEYS, liveKeys));
+        }
+        // Revoked keys are already dead, but ApiKey.env is optional = false, so the rows would still
+        // block the delete on a foreign key. They go with the environment they can no longer reach.
+        apiKeyRepository.deleteAllByEnvId(envId);
 
         List<FeatureEnvStatus> statuses = featureEnvStatusRepository.findAllByEnvId(envId);
         for (FeatureEnvStatus status : statuses) {

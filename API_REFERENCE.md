@@ -31,13 +31,33 @@ on one request is refused outright rather than one silently taking precedence. S
 - Refresh tokens expire in **7 days** and are single-use (rotated on each refresh).
 - Invitation tokens expire in **7 days**.
 
+### Ids
+
+Every id in this API is a **TSID** — a 64-bit, time-sorted value around 4.6 × 10¹⁷.
+
+**Responses send ids as JSON strings.** They have to: `Number.MAX_SAFE_INTEGER` is 9,007,199,254,740,991,
+about 9.0 × 10¹⁵, so `JSON.parse` in a browser silently rounds a TSID sent as a number. The rounded value
+addresses no row, nothing raises an error, and the request built from it comes back `403` or `404` with
+no clue why.
+
+**Request bodies accept either form.** Fields such as `tenantId` and `envId` are numeric server-side, and
+a quoted number is coerced, so a client can hold every id as a string and send it back unchanged:
+
+```json
+{ "tenantId": "461168601842738689" }   // preferred — exact
+{ "tenantId": 461168601842738689 }     // accepted, and what non-browser clients send
+```
+
+The `X-Tenant-Id` header is a string like any other header. Treat ids as **opaque**: never do arithmetic
+on them, never call `Number()` or `parseInt`, and compare them as strings.
+
 ### JWT Access Token Claims
 
 | Claim      | Type         | Description                        |
 |------------|--------------|------------------------------------|
 | `sub`      | String       | User ID                            |
 | `email`    | String       | User email                         |
-| `tenantId` | Long / null  | The caller's **default** tenant (nullable) |
+| `tenantId` | String / absent | The caller's **default** tenant. Omitted entirely when they have none |
 | `roles`    | List<String> | Role names in the default tenant   |
 
 The `roles` claim is informational only. Authorization always re-reads the caller's roles from their
@@ -133,7 +153,7 @@ Register a new user account.
 {
   "accessToken": "eyJhbGciOi...",
   "refreshToken": "dGhpcyBpcyBh...",
-  "userId": 123456789,
+  "userId": "461168601842738690",
   "email": "user@example.com",
   "tenantId": null,
   "roles": [],
@@ -469,33 +489,230 @@ their behalf.
 
 #### `POST /api/v1/invitations/{inviteToken}/accept` (Public)
 
-Accept an invitation using the token from the email link.
+Accept an invitation using the token from the email link. The body is **optional** and carries a
+registration only when the invited address has no account yet:
+
+```json
+{
+  "email": "invitee@example.com",
+  "password": "securePass123",
+  "firstName": "Jane",
+  "lastName": "Doe"
+}
+```
+
+The same `RegisterRequest` shape as `/api/v1/auth/register` — sent *here*, not there, so that creating
+the account, the membership and the status change all happen in one transaction. `email` must equal the
+invited address.
 
 **Response:** `200 OK`
 
 ```json
 {
   "message": "Invitation accepted successfully",
-  "registered": true
+  "status": "ACCEPTED",
+  "authResponse": {
+    "accessToken": "eyJhbGciOi...",
+    "refreshToken": "dGhpcyBpcyBh...",
+    "userId": "461168601842738690",
+    "email": "invitee@example.com",
+    "tenantId": "461168601842738689",
+    "roles": ["MEMBER"],
+    "accessTokenExpiresIn": 900000
+  }
 }
 ```
 
-| Field        | Type    | Description                                                                 |
-|--------------|---------|-----------------------------------------------------------------------------|
-| `message`    | String  | Status message                                                              |
-| `registered` | Boolean | `true` if user exists and membership was created. `false` if user must register first. |
+| Field          | Type             | Description                                                            |
+|----------------|------------------|------------------------------------------------------------------------|
+| `message`      | String           | Human-readable outcome                                                 |
+| `status`       | InvitationStatus | What the invitation means **to this caller** — see below               |
+| `authResponse` | AuthResponse     | Tokens for the tenant just joined; `null` unless `status` is `ACCEPTED` |
+
+Two outcomes, distinguished by `status`:
+
+| `status`               | Means                                                              | What the client does next                          |
+|------------------------|--------------------------------------------------------------------|----------------------------------------------------|
+| `PENDING_UNREGISTERED` | The address has no account, and no registration body was sent      | Collect a password and `POST` here again *with* the body |
+| `ACCEPTED`             | Membership created                                                 | Nothing — `authResponse` is a session, already scoped to the new tenant and role |
+
+> `authResponse` makes acceptance and sign-in one step: the tokens are already scoped to the tenant
+> just joined and the role granted, so a client that redirected to `/login` here would be sending the
+> user to re-authenticate into a session it was just handed. A tenant-less token would 403 on every
+> tenant endpoint until the client happened to call `switch-tenant`.
+
+> `VALIDATED` and `CANCELLED` are declared on the enum but **never assigned**. Do not write client
+> logic that waits for either.
 
 **Errors:**
 
-| Status | Condition                     |
-|--------|-------------------------------|
-| 401    | Invalid invitation token      |
-| 401    | Invitation token expired      |
-| 409    | Invitation already processed  |
+| Status | Condition                                                           |
+|--------|---------------------------------------------------------------------|
+| 401    | Invalid invitation token                                            |
+| 401    | Invitation token expired                                            |
+| 401    | The invitee already has an account and the request is anonymous     |
+| 403    | An authenticated caller who is not the invitee                      |
+| 403    | The registration body's `email` is not the invited address          |
+| 409    | Invitation already processed (status is no longer `PENDING`)        |
 
-**Notes:**
-- If user account exists: membership created immediately, invitation marked ACCEPTED.
-- If user account doesn't exist: invitation marked VALIDATED. Membership will be auto-created when the user registers with that email.
+---
+
+### Members (`/api/v1/members`)
+
+The people in the tenant the request resolves to (`X-Tenant-Id`, or the token's default). Reads are open
+to any active member; the two writes are `OWNER`/`ADMIN`.
+
+#### `GET /api/v1/members` (Protected)
+
+```json
+{
+  "members": [
+    {
+      "membershipId": "461168601842738691",
+      "userID": "461168601842738690",
+      "firstName": "Jane",
+      "lastName": "Doe",
+      "roles": [{ "id": "461168601842738600", "name": "ADMIN" }],
+      "status": "ACTIVE"
+    }
+  ]
+}
+```
+
+`REMOVED` memberships are not listed. There is **no email field** — if the dashboard needs to tell two
+people with the same display name apart, that is a gap to close here, not in the client.
+
+#### `GET /api/v1/members/{membershipId}` (Protected)
+
+One member, same shape. `404` if the membership is not in this tenant or has been removed.
+
+#### `PUT /api/v1/members/{membershipId}/role` (OWNER/ADMIN)
+
+**Request:** `{ "roleName": "ADMIN" }`
+
+**Response:** `200 OK` — the updated `MemberResponse`.
+
+| Status | Condition |
+|--------|-----------|
+| 400    | Unknown role name |
+| 403    | Caller is not OWNER/ADMIN |
+| 403    | **The requested role outranks the caller's own role in this tenant** |
+| 404    | No such membership in this tenant |
+
+That second `403` is a ceiling, not a role check: an `ADMIN` may grant `ADMIN` and below, never `OWNER`.
+Mirror it in the UI by offering only the roles at or below the caller's own rank, or the user meets it
+as a refusal after choosing.
+
+#### `DELETE /api/v1/members/{membershipId}` (OWNER/ADMIN)
+
+`204 No Content`. Removal is a status change to `REMOVED`, so the member stops appearing in listings and
+loses access on their next request.
+
+---
+
+### Environments (`/api/v1/envs`)
+
+Environments are tenant-scoped and are what `envName` refers to everywhere else in this document.
+
+| Method | Path | Role |
+|--------|------|------|
+| `POST` | `/api/v1/envs` | OWNER/ADMIN |
+| `GET` | `/api/v1/envs` | any member |
+| `GET` | `/api/v1/envs/{envId}` | any member |
+| `PUT` | `/api/v1/envs/{envId}` | OWNER/ADMIN |
+| `DELETE` | `/api/v1/envs/{envId}` | OWNER/ADMIN |
+
+**Create / update request:**
+
+```json
+{ "name": "production", "description": "Customer-facing" }
+```
+
+| Field | Type | Required | Constraints |
+|-------|------|----------|-------------|
+| `name` | String | Yes on create | `^[a-zA-Z][a-zA-Z0-9_.-]{0,49}$`. It travels as a query parameter on `/api/v1/config`, so it is restricted to what survives a round trip |
+| `description` | String | No | ≤ 255 chars |
+
+**Response:** `{ "id": "461...", "name": "production", "description": "...", "createdAt": "..." }`,
+and `GET /api/v1/envs` wraps a list of those in `{ "envs": [...] }`.
+
+**`DELETE` is the one with teeth.** It cascades to everything that configures a flag *in that
+environment* — the per-environment status rows, their targeting rules and their user overrides. The
+features themselves are untouched. Clients asking `/api/v1/config?envName=` for the deleted name get
+`404` afterwards rather than a silently empty flag list.
+
+| Status | Condition |
+|--------|-----------|
+| 409    | **The environment still has API keys that have not been revoked** |
+| 404    | No such environment in this tenant |
+
+The `409` exists because an API key is a credential inside someone else's running system: deleting the
+environment under it would stop their SDK with no warning and no auditable act of revocation. Revoke the
+keys first (`DELETE /api/v1/api-keys/{id}`), then delete the environment. Already-revoked keys do not
+block it and are removed with the environment. A dashboard should list the blocking keys at this point
+rather than just surfacing the message.
+
+---
+
+### Features (`/api/v1/features`)
+
+| Method | Path | Role |
+|--------|------|------|
+| `POST` | `/api/v1/features` | OWNER/ADMIN |
+| `GET` | `/api/v1/features` | any member |
+| `GET` | `/api/v1/features/{featureId}` | any member |
+| `PUT` | `/api/v1/features/{featureId}` | OWNER/ADMIN |
+| `DELETE` | `/api/v1/features/{featureId}` | OWNER/ADMIN |
+| `POST` | `/api/v1/features/{featureId}/enable` | OWNER/ADMIN |
+
+#### `POST /api/v1/features` (OWNER/ADMIN)
+
+```json
+{ "key": "checkout_v2", "description": "New checkout flow" }
+```
+
+| Field | Type | Required | Constraints |
+|-------|------|----------|-------------|
+| `key` | String | Yes | `^[a-zA-Z][a-zA-Z0-9_.-]{0,49}$` |
+| `description` | String | No | ≤ 255 chars |
+
+The `key` is the SDK-facing identifier and a **path segment** on `/api/v1/config/{featureKey}`, which is
+why `/` is not allowed in it. It is **immutable** — `PUT` updates the description and nothing else, so
+treat the field as read-only in the UI once the flag exists.
+
+**Response:** `201 Created`
+
+```json
+{ "id": "461168601842738692", "key": "checkout_v2", "description": "New checkout flow",
+  "createdAt": "2026-07-30T10:00:00Z" }
+```
+
+`GET /api/v1/features` wraps a list of those in `{ "features": [...] }`.
+
+#### `POST /api/v1/features/{featureId}/enable` (OWNER/ADMIN)
+
+Sets the flag's status **in one environment**. There is no tenant-wide on/off: a flag is on or off per
+environment, and this is the call behind every kill switch and rollout change.
+
+```json
+{ "envId": "461168601842738689", "enabled": true, "rolloutPercentage": 25 }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `envId` | Long | Yes | Quoted or unquoted; see the note on ids |
+| `enabled` | Boolean | Yes | |
+| `rolloutPercentage` | Integer | No | 0–100 |
+
+**Response:** `200 OK`, empty body. Read the result back with `GET /api/v1/features/{featureId}/envs`.
+
+This call **creates the per-environment status row** if it does not exist, which is why the targeting and
+override endpoints below `404` for a flag that has never been touched in that environment — see the note
+there.
+
+#### `DELETE /api/v1/features/{featureId}` (OWNER/ADMIN)
+
+`204 No Content`. Removes the flag and its configuration in every environment.
 
 ---
 
@@ -792,21 +1009,24 @@ POST /api/v1/auth/refresh { refreshToken: "..." }  --> new accessToken + refresh
 POST /api/v1/invitations { email, role }  --> sends email with link to client app
 ```
 
-The email contains a link to the **client app**: `http://localhost:3000/invitations/accept?token=<token>`
+The email contains a link to the **client app**, built from `app.client-base-url`
+(`APP_CLIENT_BASE_URL`): `<client-base-url>/invitations/<token>`. The client route must match it, or
+invitations dead-end.
 
-**Client-side flow for `/invitations/accept?token=...`:**
+**Client-side flow:**
 
 ```
-1. Client extracts `token` from query params
-2. Client calls: POST /api/v1/invitations/<token>/accept
-3. Check response:
-   a. If registered=true  --> invitation accepted, membership created
-      - If user is logged in  --> redirect to tenant dashboard
-      - If user is not logged in --> redirect to /login, then to tenant dashboard
-   b. If registered=false --> invitation validated, user must register
-      - Redirect to /register (pre-fill email if available)
-      - On registration, invitation auto-links and membership is created
-4. On error (401/409) --> show appropriate error message
+1. Client reads <token> from its own route.
+2. GET /api/v1/invitations/<token>
+   -> show who invited them, to which tenant, as what role. 401/409 here = a dead
+      invitation; say so rather than letting them fill in a form that cannot succeed.
+3. POST /api/v1/invitations/<token>/accept        (no body)
+   a. status ACCEPTED             --> store authResponse; they are signed in. Go to the dashboard.
+   b. status PENDING_UNREGISTERED --> no account yet. Collect first name / password, then
+                                      POST again with the RegisterRequest body, email
+                                      pre-filled with the invited address and NOT editable
+                                      (a different address is a 403).
+4. On 401/403/409 --> a specific message, not a generic toast; these mean different things.
 ```
 
 ### 6. SDK integration
@@ -838,5 +1058,22 @@ POST /api/v1/auth/logout { refreshToken: "..." }  --> revokes token
 ## Development
 
 - **Mock mail:** Mailpit catches all emails at `http://localhost:8025` (SMTP on port 1025).
-- **Database:** PostgreSQL 17, managed by Flyway migrations.
-- **IDs:** TSID (time-sorted distributed IDs) — treat as opaque integers/strings.
+- **Database:** MySQL 8, with the schema generated from the entities by Hibernate
+  (`spring.jpa.hibernate.ddl-auto`). There are no migrations: `prod` runs with `validate`, and the
+  one-time schema bootstrap is an explicit `update` that is then put back (see
+  `deploy/docker-compose.prod.yml`).
+- **IDs:** TSID (time-sorted distributed IDs) — see [Ids](#ids). Opaque strings on the wire.
+- **Generated OpenAPI:** `http://localhost:8080/v3/api-docs`, with Swagger UI at `/swagger-ui.html`.
+  Enabled on the `dev` and `docker` profiles only — `prod` and `staging` inherit
+  `springdoc.api-docs.enabled=false`, and `OpenApiConfig` (which carries the rule that lets these paths
+  through unauthenticated) is not loaded there at all.
+
+  Generate the dashboard's types from it rather than hand-writing them, so a contract change fails the
+  client's build instead of becoming a bug report:
+
+  ```bash
+  npx openapi-typescript http://localhost:8080/v3/api-docs -o web/src/api/schema.d.ts
+  ```
+
+  This document stays as the explanation of *why* the API behaves as it does; the generated schema is the
+  shape.

@@ -82,7 +82,7 @@ class JwtAuthenticationFilterTest {
         when(jwtTokenProvider.parseAccessToken("valid-jwt")).thenReturn(claims);
         when(claims.getSubject()).thenReturn("42");
         when(claims.get("email", String.class)).thenReturn("user@test.com");
-        when(claims.get("tenantId", Long.class)).thenReturn(100L);
+        when(claims.get("tenantId")).thenReturn("100");
         when(claims.get("roles", List.class)).thenReturn(List.of("OWNER"));
 
         filter.doFilterInternal(request, response, filterChain);
@@ -107,7 +107,7 @@ class JwtAuthenticationFilterTest {
         when(jwtTokenProvider.parseAccessToken("valid-jwt")).thenReturn(claims);
         when(claims.getSubject()).thenReturn("1");
         when(claims.get("email", String.class)).thenReturn("u@t.com");
-        when(claims.get("tenantId", Long.class)).thenReturn(null);
+        when(claims.get("tenantId")).thenReturn(null);
         when(claims.get("roles", List.class)).thenReturn(null);
 
         filter.doFilterInternal(request, response, filterChain);
@@ -223,7 +223,13 @@ class JwtAuthenticationFilterTest {
         assertNull(SecurityContextHolder.getContext().getAuthentication());
     }
 
-    /** A claim of the wrong type (tenantId as a string, say) is the same kind of unusable credential. */
+    /**
+     * A tenant claim that is not a number at all is an unusable credential.
+     *
+     * <p>This used to assert that a <em>string</em> claim was unusable, which stopped being true when
+     * JwtTokenProvider started writing the claim as a string on purpose. What must still be rejected is a
+     * value that names no tenant.
+     */
     @Test
     void doFilter_tokenWithAWronglyTypedClaim_doesNotSetContext() throws ServletException, IOException {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/features");
@@ -234,11 +240,55 @@ class JwtAuthenticationFilterTest {
         when(jwtTokenProvider.parseAccessToken("weird-jwt")).thenReturn(claims);
         when(claims.getSubject()).thenReturn("42");
         when(claims.get("email", String.class)).thenReturn("u@t.com");
-        when(claims.get("tenantId", Long.class))
-                .thenThrow(new io.jsonwebtoken.RequiredTypeException("tenantId is a String"));
+        when(claims.get("tenantId")).thenReturn("not-a-tenant");
 
         assertDoesNotThrow(() -> filter.doFilterInternal(request, response, filterChain));
 
         assertNull(SecurityContextHolder.getContext().getAuthentication());
+    }
+
+    /**
+     * Tokens minted before the claim became a string carry a JSON number, and they must keep working for
+     * the rest of their 15 minutes — otherwise deploying this change signs every active user out at once.
+     */
+    @Test
+    void doFilter_legacyNumericTenantClaim_isStillAccepted() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/features");
+        request.addHeader("Authorization", "Bearer legacy-jwt");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        when(jwtTokenProvider.validateAccessToken("legacy-jwt")).thenReturn(true);
+        when(jwtTokenProvider.parseAccessToken("legacy-jwt")).thenReturn(claims);
+        when(claims.getSubject()).thenReturn("42");
+        when(claims.get("email", String.class)).thenReturn("u@t.com");
+        when(claims.get("tenantId")).thenReturn(461168601842738689L);
+        when(claims.get("roles", List.class)).thenReturn(List.of("OWNER"));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        TenantUserDetails details =
+                (TenantUserDetails) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        assertEquals(461168601842738689L, details.getTenantId());
+    }
+
+    /** The string form the provider writes now, round-tripped at full TSID width. */
+    @Test
+    void doFilter_stringTenantClaim_keepsFullPrecision() throws ServletException, IOException {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/features");
+        request.addHeader("Authorization", "Bearer tsid-jwt");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        when(jwtTokenProvider.validateAccessToken("tsid-jwt")).thenReturn(true);
+        when(jwtTokenProvider.parseAccessToken("tsid-jwt")).thenReturn(claims);
+        when(claims.getSubject()).thenReturn("42");
+        when(claims.get("email", String.class)).thenReturn("u@t.com");
+        when(claims.get("tenantId")).thenReturn("461168601842738689");
+        when(claims.get("roles", List.class)).thenReturn(List.of("OWNER"));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        TenantUserDetails details =
+                (TenantUserDetails) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        assertEquals(461168601842738689L, details.getTenantId());
     }
 }
