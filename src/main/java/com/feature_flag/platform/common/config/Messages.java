@@ -67,6 +67,8 @@ public final class Messages {
     //ENV
     public static final String ENV_NAME_ALREADY_EXISTS = "env.name.already.exists";
     public static final String RESOURCE_ENV_NOT_FOUND = "resource.env.not.found";
+    public static final String INVITATION_NOT_PENDING = "invitation.not.pending";
+    public static final String RESOURCE_INVITATION_NOT_FOUND = "resource.invitation.not.found";
     public static final String ENV_HAS_ACTIVE_API_KEYS = "env.has.active.api.keys";
 
     // Feature rule

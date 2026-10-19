@@ -58,7 +58,7 @@ class TsidJsonContractTest {
     @Test
     void memberResponse_sendsIdsAsJsonStrings() throws Exception {
         MemberResponse member = new MemberResponse(
-                TSID_TEXT, TSID_TEXT, "Jane", "Doe",
+                TSID_TEXT, TSID_TEXT, "jane@test.com", "Jane", "Doe",
                 List.of(new RoleResponse(TSID_TEXT, "OWNER")), MembershipStatus.ACTIVE);
 
         JsonNode json = mapper.readTree(mapper.writeValueAsString(member));

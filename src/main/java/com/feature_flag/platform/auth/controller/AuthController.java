@@ -2,6 +2,7 @@ package com.feature_flag.platform.auth.controller;
 
 import com.feature_flag.platform.auth.dto.AuthResponse;
 import com.feature_flag.platform.auth.dto.LoginRequest;
+import com.feature_flag.platform.auth.dto.MeResponse;
 import com.feature_flag.platform.auth.dto.MessageResponse;
 import com.feature_flag.platform.auth.dto.RefreshRequest;
 import com.feature_flag.platform.auth.dto.RegisterRequest;
@@ -15,6 +16,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -54,6 +56,16 @@ public class AuthController {
     public ResponseEntity<MessageResponse> logout(@Valid @RequestBody RefreshRequest request) {
         tokenService.logout(request);
         return ResponseEntity.ok(new MessageResponse(I18N.getMessage(Messages.AUTH_LOGOUT_SUCCESS)));
+    }
+
+    /**
+     * The caller's identity, for the account menu. Not tenant-scoped -- see TenantContextFilter -- so it
+     * answers for a user who belongs to no tenant yet, which is exactly the user the shell has to render
+     * something for right after registration.
+     */
+    @GetMapping("/me")
+    public ResponseEntity<MeResponse> me(@AuthenticationPrincipal TenantUserDetails userDetails) {
+        return ResponseEntity.ok(authService.me(userDetails.getUserId(), userDetails.getTenantId()));
     }
 
     @PostMapping("/switch-tenant")

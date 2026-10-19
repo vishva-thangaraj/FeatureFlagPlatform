@@ -34,6 +34,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -227,11 +228,12 @@ public class FeatureService {
 
     @Transactional(readOnly = true)
     public List<RuleResponse> listRules(Long featureId, Long envId, Long tenantId) {
-        FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
-        return featureRuleRepository.findAllByFeatureEnvStatusIdOrderByPriorityAsc(fes.getId())
-                .stream()
-                .map(featureRuleMapper::toRuleResponse)
-                .toList();
+        return findExistingFeatureEnvStatus(featureId, envId, tenantId)
+                .map(fes -> featureRuleRepository.findAllByFeatureEnvStatusIdOrderByPriorityAsc(fes.getId())
+                        .stream()
+                        .map(featureRuleMapper::toRuleResponse)
+                        .toList())
+                .orElseGet(List::of);
     }
 
     /**
@@ -248,7 +250,7 @@ public class FeatureService {
 
     @Transactional
     public RuleResponse addRule(Long featureId, Long envId, RuleRequest request, Long tenantId) {
-        FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
+        FeatureEnvStatus fes = findOrCreateFeatureEnvStatus(featureId, envId, tenantId);
 
         List<RuleRequest> combined = new ArrayList<>();
         for (FeatureRule existing : featureRuleRepository.findAllByFeatureEnvStatusIdOrderByPriorityAsc(fes.getId())) {
@@ -334,7 +336,7 @@ public class FeatureService {
     /** Replace the entire rule set for a feature/env atomically. An empty list clears all rules. */
     @Transactional
     public List<RuleResponse> replaceRules(Long featureId, Long envId, ReplaceRulesRequest request, Long tenantId) {
-        FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
+        FeatureEnvStatus fes = findOrCreateFeatureEnvStatus(featureId, envId, tenantId);
         ruleValidator.validateSet(request.rules());
 
         featureRuleRepository.deleteAllByFeatureEnvStatusId(fes.getId());
@@ -365,16 +367,17 @@ public class FeatureService {
 
     @Transactional(readOnly = true)
     public List<FeatureUserOverrideResponse> listOverrides(Long featureId, Long envId, Long tenantId) {
-        FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
-        return featureUserOverrideRepository.findAllByFeatureEnvStatusId(fes.getId())
-                .stream()
-                .map(featureEnvStatusMapper::toFeatureUserOverrideResponse)
-                .toList();
+        return findExistingFeatureEnvStatus(featureId, envId, tenantId)
+                .map(fes -> featureUserOverrideRepository.findAllByFeatureEnvStatusId(fes.getId())
+                        .stream()
+                        .map(featureEnvStatusMapper::toFeatureUserOverrideResponse)
+                        .toList())
+                .orElseGet(List::of);
     }
 
     @Transactional
     public FeatureUserOverrideResponse upsertOverride(Long featureId, Long envId, OverrideRequest request, Long tenantId) {
-        FeatureEnvStatus fes = findFeatureEnvStatus(featureId, envId, tenantId);
+        FeatureEnvStatus fes = findOrCreateFeatureEnvStatus(featureId, envId, tenantId);
         FeatureUserOverride override = featureUserOverrideRepository
                 .findByFeatureEnvStatusIdAndExternalUserId(fes.getId(), request.externalUserId())
                 .orElseGet(() -> FeatureUserOverride.builder()
@@ -438,6 +441,56 @@ public class FeatureService {
             env.setUpdatedAt(Instant.now());
             envRepository.save(env);
         }
+    }
+
+    /**
+     * The status row for a read, if there is one.
+     *
+     * <p>The feature and the environment are still checked against the tenant, so a wrong or foreign id
+     * answers 404; it is only the <em>configuration</em> row whose absence is not an error. A flag that has
+     * never been touched in an environment has no rules and no overrides there, which is an empty list, not
+     * a missing resource — the dashboard's targeting tab opens on exactly that state for every new flag.
+     */
+    private Optional<FeatureEnvStatus> findExistingFeatureEnvStatus(Long featureId, Long envId, Long tenantId) {
+        findByIdAndTenant(featureId, tenantId);
+        findEnvForTenant(envId, tenantId);
+        return featureEnvStatusRepository.findByFeatureIdAndEnvId(featureId, envId);
+    }
+
+    /**
+     * The status row for a write, created on first use.
+     *
+     * <p>Writing the first rule or override for a flag in an environment is itself the act of configuring
+     * it there, so the row that configuration hangs off is created here rather than demanded in advance.
+     * Without this the dashboard's only way to save a rule on a new flag was to call {@code enable} with
+     * {@code {"enabled": false}} first, which publishes a {@code STATUS_CHANGED} event describing a status
+     * change that nobody made.
+     *
+     * <p>No event is published here for the same reason: nothing about the flag's status changed. The
+     * caller publishes its own {@code RULE_ADDED} / {@code RULES_REPLACED} / {@code OVERRIDE_SET} event,
+     * which is the change that actually happened.
+     *
+     * <p>The new row is {@code enabled = false} (the field default) and fully rolled out, matching what
+     * {@code setFeatureStatus} creates: the percentage is something you opt into, so a flag later switched
+     * on is on for everyone rather than silently off for everyone at 0%.
+     */
+    private FeatureEnvStatus findOrCreateFeatureEnvStatus(Long featureId, Long envId, Long tenantId) {
+        Feature feature = findByIdAndTenant(featureId, tenantId);
+        Env env = findEnvForTenant(envId, tenantId);
+        return featureEnvStatusRepository.findByFeatureIdAndEnvId(featureId, envId)
+                .orElseGet(() -> featureEnvStatusRepository.save(FeatureEnvStatus.builder()
+                        .feature(feature)
+                        .env(env)
+                        .rolloutPercentage(FULL_ROLLOUT)
+                        .build()));
+    }
+
+    /** An environment of this tenant, or 404. */
+    private Env findEnvForTenant(Long envId, Long tenantId) {
+        return envRepository.findById(envId)
+                .filter(e -> e.getTenant().getId().equals(tenantId))
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_ENV_NOT_FOUND)));
     }
 
     private FeatureEnvStatus findFeatureEnvStatus(Long featureId, Long envId, Long tenantId) {

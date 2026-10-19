@@ -34,6 +34,16 @@ public interface UserInvitationRepository extends JpaRepository<UserInvitation, 
                                                                    InvitationStatus status);
 
     Optional<UserInvitation> findByTokenHash(String tokenHash);
+
+    /**
+     * The tenant's outstanding invitations. {@code PENDING} is the only non-terminal status, so this is
+     * everything an admin can still act on — including rows whose {@code expiresAt} has passed, which are
+     * stored as PENDING until something touches them and are reported as EXPIRED by the mapper.
+     */
+    List<UserInvitation> findByTenantIdAndStatusOrderByCreatedAtDesc(Long tenantId, InvitationStatus status);
+
+    /** Addressed by id, not by token: the admin endpoints act on invitations they can see, not hold. */
+    Optional<UserInvitation> findByIdAndTenantId(Long id, Long tenantId);
     /**
      * Tenant-deletion cascade. Invitations are leaves — nothing points at them — so they can go at any
      * point before the tenant row itself. Pending invitations die with the tenant by design: the token

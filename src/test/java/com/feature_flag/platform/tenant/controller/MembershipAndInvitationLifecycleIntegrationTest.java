@@ -35,6 +35,9 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -84,6 +87,7 @@ class MembershipAndInvitationLifecycleIntegrationTest {
 
     private Tenant acme;
     private String ownerToken;
+    private String memberToken;
     private Membership activeMembership;
     private Membership removedMembership;
 
@@ -101,6 +105,8 @@ class MembershipAndInvitationLifecycleIntegrationTest {
 
         ownerToken = jwtTokenProvider.generateAccessToken(
                 owner.getId(), owner.getEmail(), acme.getId(), List.of(RoleName.OWNER.name()));
+        memberToken = jwtTokenProvider.generateAccessToken(
+                active.getId(), active.getEmail(), acme.getId(), List.of(RoleName.MEMBER.name()));
     }
 
     private User saveUser(String email, String firstName) {
@@ -273,5 +279,151 @@ class MembershipAndInvitationLifecycleIntegrationTest {
 
         mockMvc.perform(invite(RETURNING_EMAIL.toUpperCase(), RoleName.MEMBER))
                 .andExpect(status().isConflict());
+    }
+
+    // ------------------------------------------------------------------ the members table can say who someone is
+
+    /** Names are not identifying: lastName is optional and two people share a first name often enough. */
+    @Test
+    void memberListing_carriesTheEmail() throws Exception {
+        mockMvc.perform(as(get("/api/v1/members")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.members[?(@.email == 'active@acme.com')]").isNotEmpty())
+                .andExpect(jsonPath("$.members[?(@.email == 'owner@acme.com')]").isNotEmpty());
+    }
+
+    // ------------------------------------------------------------------ outstanding invitations are visible and actionable
+
+    @Test
+    void pendingInvitations_areListed() throws Exception {
+        seedInvitation(RETURNING_EMAIL, InvitationStatus.PENDING, Instant.now().plusSeconds(3600));
+
+        mockMvc.perform(as(get("/api/v1/invitations")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invitations.length()").value(1))
+                .andExpect(jsonPath("$.invitations[0].email").value(RETURNING_EMAIL))
+                .andExpect(jsonPath("$.invitations[0].status").value("PENDING"))
+                .andExpect(jsonPath("$.invitations[0].role").value("MEMBER"))
+                // The token is the invitee's credential; an admin listing has no business carrying it.
+                .andExpect(jsonPath("$.invitations[0].tokenHash").doesNotExist());
+    }
+
+    /**
+     * A row past its expiry is still stored PENDING until something touches it. Reporting that verbatim
+     * would show an admin a live invitation that cannot be accepted.
+     */
+    @Test
+    void expiredInvitation_isListedAsExpired() throws Exception {
+        seedInvitation(RETURNING_EMAIL, InvitationStatus.PENDING, Instant.now().minusSeconds(3600));
+
+        mockMvc.perform(as(get("/api/v1/invitations")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invitations[0].status").value("EXPIRED"));
+    }
+
+    /** Terminal invitations are history, not something to act on. */
+    @Test
+    void acceptedInvitation_isNotListed() throws Exception {
+        seedInvitation(RETURNING_EMAIL, InvitationStatus.ACCEPTED, Instant.now().plusSeconds(3600));
+
+        mockMvc.perform(as(get("/api/v1/invitations")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invitations.length()").value(0));
+    }
+
+    /**
+     * The gap this closes: an admin who invited the wrong address was stuck for seven days, because a live
+     * PENDING invitation is also what makes re-inviting that address a 409.
+     */
+    @Test
+    void cancellingAnInvitation_setsCancelledAndFreesTheAddress() throws Exception {
+        UserInvitation invitation =
+                seedInvitation(RETURNING_EMAIL, InvitationStatus.PENDING, Instant.now().plusSeconds(3600));
+
+        mockMvc.perform(as(post("/api/v1/invitations/{id}/cancel", invitation.getId())))
+                .andExpect(status().isNoContent());
+
+        assertThat(userInvitationRepository.findById(invitation.getId()).orElseThrow().getStatus())
+                .isEqualTo(InvitationStatus.CANCELLED);
+
+        mockMvc.perform(invite(RETURNING_EMAIL, RoleName.MEMBER))
+                .andExpect(status().isOk());
+        assertThat(pendingInvitationsFor(RETURNING_EMAIL)).hasSize(1);
+    }
+
+    @Test
+    void cancellingAnInvitationTwice_isAConflict() throws Exception {
+        UserInvitation invitation =
+                seedInvitation(RETURNING_EMAIL, InvitationStatus.PENDING, Instant.now().plusSeconds(3600));
+
+        mockMvc.perform(as(post("/api/v1/invitations/{id}/cancel", invitation.getId())))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(as(post("/api/v1/invitations/{id}/cancel", invitation.getId())))
+                .andExpect(status().isConflict());
+    }
+
+    /**
+     * Resending necessarily mints a new token, because only the hash is stored. The test asserts exactly
+     * that: a mail went out, and the stored hash is not the one it had before.
+     */
+    @Test
+    void resendingAnInvitation_issuesANewTokenAndExtendsTheExpiry() throws Exception {
+        UserInvitation invitation =
+                seedInvitation(RETURNING_EMAIL, InvitationStatus.PENDING, Instant.now().minusSeconds(3600));
+        String hashBefore = invitation.getTokenHash();
+
+        mockMvc.perform(as(post("/api/v1/invitations/{id}/resend", invitation.getId())))
+                .andExpect(status().isNoContent());
+
+        UserInvitation after = userInvitationRepository.findById(invitation.getId()).orElseThrow();
+        assertThat(after.getTokenHash()).isNotEqualTo(hashBefore);
+        assertThat(after.getExpiresAt()).isAfter(Instant.now());
+        assertThat(after.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        verify(emailService).sendInvitationEmail(eq(RETURNING_EMAIL), eq("Acme"), anyString());
+    }
+
+    @Test
+    void anotherTenantsInvitation_cannotBeCancelled() throws Exception {
+        Tenant globex = tenantRepository.save(Tenant.builder().name("Globex").build());
+        UserInvitation theirs = userInvitationRepository.save(UserInvitation.builder()
+                .email("someone@globex.com").tenant(globex).role(RoleName.MEMBER)
+                .status(InvitationStatus.PENDING)
+                .tokenHash(TokenHashUtil.sha256("gx-" + INVITE_TOKEN_SEQUENCE.incrementAndGet()))
+                .expiresAt(Instant.now().plusSeconds(3600)).build());
+
+        mockMvc.perform(as(post("/api/v1/invitations/{id}/cancel", theirs.getId())))
+                .andExpect(status().isNotFound());
+    }
+
+    /**
+     * The admin invitation endpoints are id-addressed and tenant-scoped, unlike the token-addressed ones
+     * an invitee uses. That distinction only holds because TenantContextFilter stopped exempting every
+     * path under /api/v1/invitations/ from tenant resolution -- without it these role rules would be
+     * evaluated against the token's roles rather than the acting tenant's membership.
+     */
+    @Test
+    void invitationAdministration_isRefusedToAMember() throws Exception {
+        UserInvitation invitation =
+                seedInvitation(RETURNING_EMAIL, InvitationStatus.PENDING, Instant.now().plusSeconds(3600));
+
+        mockMvc.perform(asMember(get("/api/v1/invitations")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(asMember(post("/api/v1/invitations/{id}/cancel", invitation.getId())))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(asMember(post("/api/v1/invitations/{id}/resend", invitation.getId())))
+                .andExpect(status().isForbidden());
+
+        assertThat(userInvitationRepository.findById(invitation.getId()).orElseThrow().getStatus())
+                .isEqualTo(InvitationStatus.PENDING);
+    }
+
+    private MockHttpServletRequestBuilder asMember(MockHttpServletRequestBuilder builder) {
+        return builder
+                .header("Authorization", "Bearer " + memberToken)
+                .contentType("application/json")
+                .with(request -> {
+                    request.setRemoteAddr("10.4.0." + CLIENT_ADDRESS_SEQUENCE.incrementAndGet());
+                    return request;
+                });
     }
 }

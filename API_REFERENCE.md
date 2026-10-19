@@ -257,6 +257,37 @@ Revoke a refresh token.
 
 ---
 
+#### `GET /api/v1/auth/me` (Protected)
+
+The caller's own identity. The access token carries an email and a role list and nothing else, so this
+is where a dashboard gets a name to put in the account menu.
+
+**Response:** `200 OK`
+
+```json
+{
+  "userId": "461168601842738690",
+  "email": "jane@example.com",
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "status": "ACTIVE",
+  "tenantId": "461168601842738689",
+  "roles": ["OWNER"]
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `tenantId` | String / null | The **default** tenant from the token, not the tenant a request acts on via `X-Tenant-Id`. `null` when the caller has no active membership in it |
+| `roles` | List&lt;String&gt; | Read from the membership, not from the token claim. Empty when `tenantId` is `null` |
+
+**Not tenant-scoped**, deliberately: it answers for a user who belongs to no tenant yet, and for one
+whose membership was just removed, reporting `tenantId: null` instead of `403`. Those are exactly the
+callers a dashboard must be able to render something for — route them to the tenant picker. It still
+requires a valid token.
+
+---
+
 #### `POST /api/v1/auth/switch-tenant` (Protected)
 
 Switch the authenticated user's tenant context.
@@ -478,6 +509,65 @@ differs only by case — is a `400`, not a `500`.
 Three token-addressed endpoints. The token is a **path segment**, not a query parameter, and
 accepting is a `POST` — it creates a membership.
 
+Plus three **admin** endpoints, addressed by invitation **id** rather than by token, because an admin
+acts on invitations they can see and the token belongs in the invitee's inbox. All three are
+`OWNER`/`ADMIN` and act on the tenant the request resolves to.
+
+- `GET /api/v1/invitations` (OWNER/ADMIN) — the tenant's outstanding invitations.
+- `POST /api/v1/invitations/{invitationId}/cancel` (OWNER/ADMIN)
+- `POST /api/v1/invitations/{invitationId}/resend` (OWNER/ADMIN)
+
+#### `GET /api/v1/invitations` (OWNER/ADMIN)
+
+```json
+{
+  "invitations": [
+    {
+      "id": "461168601842738693",
+      "email": "invitee@example.com",
+      "role": "MEMBER",
+      "status": "PENDING",
+      "invitedByEmail": "owner@example.com",
+      "createdAt": "2026-10-12T10:00:00Z",
+      "expiresAt": "2026-10-19T10:00:00Z"
+    }
+  ]
+}
+```
+
+Only invitations still stored as `PENDING` appear — accepted, declined and cancelled ones are history.
+`status` is **computed for the response**: a row whose `expiresAt` has passed is reported as `EXPIRED`
+even though it is still stored as `PENDING`, because showing an admin a live invitation that cannot be
+accepted is how they end up waiting for an acceptance that will never come. No token is returned.
+
+#### `POST /api/v1/invitations/{invitationId}/cancel` (OWNER/ADMIN)
+
+`204 No Content`. Sets the invitation to `CANCELLED` — the first thing in the system that assigns that
+status. This is also how an admin frees an address: a live `PENDING` invitation is what makes re-inviting
+it a `409`, so without a cancel the only remedy for a typo was to wait out the seven-day expiry.
+
+#### `POST /api/v1/invitations/{invitationId}/resend` (OWNER/ADMIN)
+
+`204 No Content`. Sends the invitation again with a **new token** and a fresh expiry.
+
+The token necessarily changes: only its hash is stored, so the original link cannot be reproduced. The
+previously emailed link therefore stops working — which is also what makes resending the right answer to
+an invitation that leaked. Works on an expired-but-pending invitation, which is the common case.
+
+**Errors for both** (`{invitationId}`):
+
+| Status | Condition |
+|--------|-----------|
+| 403    | Caller is not `OWNER`/`ADMIN`, or the invitation's role outranks the caller's own |
+| 404    | No such invitation in this tenant |
+| 409    | The invitation is no longer `PENDING` |
+
+That `403` on rank is the same ceiling as `PUT /members/{id}/role`: an `ADMIN` must not be able to resend
+an `OWNER` invitation an owner created, which would hand them an escalation the invite endpoint already
+refuses to grant directly.
+
+The token-addressed endpoints the invitee uses:
+
 - `GET /api/v1/invitations/{inviteToken}` (Public) — read an invitation before acting on it.
 - `POST /api/v1/invitations/{inviteToken}/accept` (Public)
 - `POST /api/v1/invitations/{inviteToken}/decline` (Public)
@@ -570,6 +660,7 @@ to any active member; the two writes are `OWNER`/`ADMIN`.
     {
       "membershipId": "461168601842738691",
       "userID": "461168601842738690",
+      "email": "jane@example.com",
       "firstName": "Jane",
       "lastName": "Doe",
       "roles": [{ "id": "461168601842738600", "name": "ADMIN" }],
@@ -579,8 +670,8 @@ to any active member; the two writes are `OWNER`/`ADMIN`.
 }
 ```
 
-`REMOVED` memberships are not listed. There is **no email field** — if the dashboard needs to tell two
-people with the same display name apart, that is a gap to close here, not in the client.
+`REMOVED` memberships are not listed. `email` is what identifies a person in this table: `lastName` is
+optional and first names collide.
 
 #### `GET /api/v1/members/{membershipId}` (Protected)
 
@@ -706,9 +797,9 @@ environment, and this is the call behind every kill switch and rollout change.
 
 **Response:** `200 OK`, empty body. Read the result back with `GET /api/v1/features/{featureId}/envs`.
 
-This call **creates the per-environment status row** if it does not exist, which is why the targeting and
-override endpoints below `404` for a flag that has never been touched in that environment — see the note
-there.
+This call creates the per-environment status row if it does not exist. So do the first rule and the
+first override write, so a flag that has never been enabled anywhere is still configurable — see
+[Feature Targeting Rules](#feature-targeting-rules-apiv1featuresfeatureid).
 
 #### `DELETE /api/v1/features/{featureId}` (OWNER/ADMIN)
 
@@ -721,6 +812,17 @@ there.
 Multi-field, multi-value targeting for a flag in a given environment. A flag/env can carry many
 rules; **all enabled rules must match** (logical AND). Use `IN`/`NOT_IN` for "one field, many
 values" (e.g. `country IN ["IN","US"]`). Writes require `OWNER`/`ADMIN`.
+
+> **A flag that has never been touched in an environment has no rules there — that is an empty list, not
+> a missing resource.** The reads below answer `200` with `[]`, and the first rule or override write
+> creates the per-environment row the configuration hangs off. A wrong or foreign `featureId`/`envId` is
+> still a `404`; only the absence of configuration is not an error.
+>
+> This is what lets a targeting editor open on a brand-new flag. It also means the dashboard never needs
+> the old workaround of calling `enable` with `{"enabled": false}` first, which published a
+> `STATUS_CHANGED` event describing a status change nobody made. Creating the row this way publishes no
+> status event — only the `RULE_ADDED` / `RULES_REPLACED` / `OVERRIDE_SET` event for the change that
+> actually happened.
 
 #### `GET /api/v1/features/{featureId}/envs` (Protected)
 
