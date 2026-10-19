@@ -100,14 +100,20 @@ feature or environment does not exist in this tenant. Do not collapse them into 
 
 ### Recommended
 
-8 is still open; 9 and 10 are done.
+**8. Refresh token in an httpOnly cookie.** ✅ Opt in with `X-Refresh-Transport: cookie` on register,
+login, switch-tenant and invitation accept; the token then comes back as
+`HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth` and is **omitted from the body**. On refresh and
+logout the cookie's presence is the request, so the client sends no body at all. Non-browser clients are
+untouched.
 
-**8. Move the refresh token into an httpOnly cookie.** Today it comes back in the JSON body, so the
-browser has to keep it somewhere JavaScript can read. Any XSS bug then walks off with a 7-day
-credential. Because the app is served from the same origin, the cookie is cheap:
-`HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`. Keep the body field for non-browser clients.
-Until this lands, the client keeps the refresh token in `localStorage` behind one module, so the
-switch is a one-file change.
+**→ For the client:** there is no longer a refresh token to store, so the `localStorage` module the plan
+hedged with is not needed — send the header at login and let the browser hold it. Keep the access token
+in memory as before.
+
+Be honest in the threat model: `HttpOnly` does not stop XSS from *using* the session (the browser
+attaches the cookie to a `/refresh` the attacker triggers). It stops the attacker walking off with a
+seven-day credential. The body field is dropped precisely so they cannot read the rotated token out of a
+`/refresh` response instead.
 
 **9. Structured validation errors.** ✅ `fieldErrors: [{field, message}]` sits next to `message`, which
 is unchanged — the change is additive. A **missing `field`** means the constraint belongs to the request

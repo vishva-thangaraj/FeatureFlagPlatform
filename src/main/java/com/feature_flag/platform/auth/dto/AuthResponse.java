@@ -1,5 +1,7 @@
 package com.feature_flag.platform.auth.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.util.List;
 
 /**
@@ -16,6 +18,16 @@ import java.util.List;
  */
 public record AuthResponse(
         String accessToken,
+        /*
+         * Omitted entirely when the caller asked for cookie transport (X-Refresh-Transport: cookie), which
+         * is the point of asking: a body that still carried the token would let script read the rotated
+         * one out of a /refresh response, and the HttpOnly cookie would be protecting nothing.
+         *
+         * NON_NULL is on this component alone, deliberately. Putting it on the record would also drop
+         * "tenantId": null, which callers read to mean "you have no default tenant" -- a present key with
+         * a null value and an absent key are different answers there.
+         */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         String refreshToken,
         String userId,
         String email,
