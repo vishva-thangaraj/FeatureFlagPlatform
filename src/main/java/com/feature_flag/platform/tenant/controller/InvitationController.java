@@ -1,11 +1,14 @@
 package com.feature_flag.platform.tenant.controller;
 
 import com.feature_flag.platform.auth.dto.RegisterRequest;
+import com.feature_flag.platform.common.security.RefreshTokenCookies;
 import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.tenant.dto.InvitationListResponse;
 import com.feature_flag.platform.tenant.dto.InvitationResponse;
 import com.feature_flag.platform.tenant.dto.UserInviteRequest;
 import com.feature_flag.platform.tenant.service.InvitationService;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -16,9 +19,12 @@ import org.springframework.web.bind.annotation.*;
 public class InvitationController {
 
     private final InvitationService invitationService;
+    private final RefreshTokenCookies refreshTokenCookies;
 
-    public InvitationController(InvitationService invitationService) {
+    public InvitationController(InvitationService invitationService,
+                                RefreshTokenCookies refreshTokenCookies) {
         this.invitationService = invitationService;
+        this.refreshTokenCookies = refreshTokenCookies;
     }
 
     @PostMapping
@@ -50,9 +56,28 @@ public class InvitationController {
     @PostMapping("/{inviteToken}/accept")
     public ResponseEntity<InvitationResponse> acceptInvitation(@PathVariable("inviteToken") String token,
                                                                 @RequestBody(required = false) @Valid RegisterRequest request,
-                                                                @AuthenticationPrincipal TenantUserDetails userDetails) {
+                                                                @AuthenticationPrincipal TenantUserDetails userDetails,
+                                                                HttpServletRequest httpRequest,
+                                                                HttpServletResponse httpResponse) {
         InvitationResponse result = invitationService.acceptInvitation(token, request, userDetails);
-        return ResponseEntity.ok(result);
+        return ResponseEntity.ok(withCookieTransport(result, httpRequest, httpResponse));
+    }
+
+    /**
+     * Accepting an invitation hands back a session, so it issues the cookie on the same terms the auth
+     * endpoints do. Left out, a browser would finish this flow holding a refresh token in a response body
+     * with no cookie behind it — the one state the whole change exists to avoid, reached by the one route
+     * a new user is most likely to arrive through.
+     */
+    private InvitationResponse withCookieTransport(InvitationResponse result, HttpServletRequest httpRequest,
+                                                   HttpServletResponse httpResponse) {
+        if (result.authResponse() == null) {
+            return result;
+        }
+        return new InvitationResponse(
+                result.message(),
+                result.status(),
+                refreshTokenCookies.apply(result.authResponse(), httpRequest, httpResponse));
     }
 
     @PostMapping("/{inviteToken}/decline")
