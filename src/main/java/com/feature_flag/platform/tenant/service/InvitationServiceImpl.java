@@ -19,6 +19,8 @@ import com.feature_flag.platform.common.exception.UnauthorizedException;
 import com.feature_flag.platform.common.security.JwtProperties;
 import com.feature_flag.platform.common.security.TenantUserDetails;
 import com.feature_flag.platform.common.security.TokenHashUtil;
+import com.feature_flag.platform.tenant.dto.InvitationListResponse;
+import com.feature_flag.platform.tenant.dto.InvitationSummary;
 import com.feature_flag.platform.tenant.dto.InvitationResponse;
 import com.feature_flag.platform.tenant.entity.UserInvitation;
 import com.feature_flag.platform.tenant.enums.InvitationStatus;
@@ -245,6 +247,85 @@ public class InvitationServiceImpl implements InvitationService {
      * PENDING (the status is only rewritten when someone tries to accept it), so it is marked EXPIRED here
      * as it is superseded: leaving it PENDING would let the old token stay usable alongside the new one.
      */
+    @Override
+    @Transactional(readOnly = true)
+    public InvitationListResponse listInvitations(Long tenantId) {
+        List<UserInvitation> pending = userInvitationRepository
+                .findByTenantIdAndStatusOrderByCreatedAtDesc(tenantId, InvitationStatus.PENDING);
+
+        Instant now = Instant.now();
+        List<InvitationSummary> summaries = pending.stream()
+                .map(invitation -> new InvitationSummary(
+                        String.valueOf(invitation.getId()),
+                        invitation.getEmail(),
+                        invitation.getRole(),
+                        // Reported, not stored: an invitation past its expiry stays PENDING in the table
+                        // until something touches it, and showing an admin a live invitation that no
+                        // longer works is how they end up waiting for an acceptance that cannot come.
+                        invitation.getExpiresAt().isBefore(now)
+                                ? InvitationStatus.EXPIRED
+                                : InvitationStatus.PENDING,
+                        invitation.getInvitedBy() == null ? null : invitation.getInvitedBy().getEmail(),
+                        invitation.getCreatedAt(),
+                        invitation.getExpiresAt()))
+                .toList();
+
+        return new InvitationListResponse(summaries);
+    }
+
+    @Override
+    @Transactional
+    public void cancelInvitation(Long invitationId, TenantUserDetails caller) {
+        UserInvitation invitation = requireAdministrableInvitation(invitationId, caller, "cancelled");
+        invitation.setStatus(InvitationStatus.CANCELLED);
+        userInvitationRepository.save(invitation);
+    }
+
+    @Override
+    @Transactional
+    public void resendInvitation(Long invitationId, TenantUserDetails caller) {
+        UserInvitation invitation = requireAdministrableInvitation(invitationId, caller, "resent");
+
+        // A new token, because the old one exists only as a hash and cannot be reproduced. The previous
+        // link stops working as a result, which is what makes resending a usable answer to a leaked one.
+        String rawToken = UUID.randomUUID().toString();
+        invitation.setTokenHash(TokenHashUtil.sha256(rawToken));
+        invitation.setExpiresAt(Instant.now().plusMillis(jwtProperties.getInvitationExpirationMs()));
+        userInvitationRepository.save(invitation);
+
+        emailService.sendInvitationEmail(
+                invitation.getEmail(), invitation.getTenant().getName(), rawToken);
+    }
+
+    /**
+     * An invitation of the caller's tenant that is still open, and that this caller is allowed to act on.
+     *
+     * <p>The role ceiling is re-checked rather than assumed from the invitation's existence: an ADMIN must
+     * not be able to resend an OWNER invitation an owner created, which would hand them the same escalation
+     * {@code inviteUserToTenant} already refuses to grant directly.
+     *
+     * <p>Expired-but-PENDING rows are deliberately still administrable — resending one is the normal way to
+     * revive it, and cancelling one is how an admin clears the list.
+     */
+    private UserInvitation requireAdministrableInvitation(Long invitationId, TenantUserDetails caller,
+                                                          String action) {
+        Long tenantId = caller.getTenantId();
+        if (tenantId == null) {
+            throw new ResourceNotFoundException(I18N.getMessage(Messages.TENANT_NO_ACTIVE_MEMBERSHIP));
+        }
+
+        UserInvitation invitation = userInvitationRepository.findByIdAndTenantId(invitationId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_INVITATION_NOT_FOUND)));
+
+        if (invitation.getStatus() != InvitationStatus.PENDING) {
+            throw new ConflictException(I18N.getMessage(Messages.INVITATION_NOT_PENDING, action));
+        }
+
+        roleGrantPolicy.requireMayGrant(caller, invitation.getRole());
+        return invitation;
+    }
+
     private void supersedeOrRejectExistingInvitation(String email, Long tenantId) {
         List<UserInvitation> pending = userInvitationRepository
                 .findByEmailIgnoreCaseAndTenantIdAndStatus(email, tenantId, InvitationStatus.PENDING);

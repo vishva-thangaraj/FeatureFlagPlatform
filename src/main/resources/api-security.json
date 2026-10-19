@@ -52,6 +52,16 @@
       "allowedParams": ["refreshToken"]
     },
     {
+      "path": "/api/v1/auth/me",
+      "method": "GET",
+      "authRequired": true,
+      "roles": [],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      }
+    },
+    {
       "path": "/api/v1/auth/switch-tenant",
       "method": "POST",
       "authRequired": true,
@@ -169,6 +179,36 @@
         "burstSize": 5
       },
       "allowedParams": ["email", "roleName"]
+    },
+    {
+      "path": "/api/v1/invitations",
+      "method": "GET",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 60,
+        "burstSize": 10
+      }
+    },
+    {
+      "path": "/api/v1/invitations/*/cancel",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      }
+    },
+    {
+      "path": "/api/v1/invitations/*/resend",
+      "method": "POST",
+      "authRequired": true,
+      "roles": ["OWNER", "ADMIN"],
+      "throttle": {
+        "requestsPerMinute": 20,
+        "burstSize": 5
+      }
     },
     {
       "path": "/api/v1/invitations/*/accept",

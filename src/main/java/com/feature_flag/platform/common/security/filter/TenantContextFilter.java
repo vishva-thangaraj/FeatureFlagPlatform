@@ -61,6 +61,13 @@ public class TenantContextFilter extends OncePerRequestFilter {
             // them unable to log out at all. (Logout became authenticated so that it could verify you own
             // the refresh token you present; that must not make it tenant-scoped as a side effect.)
             "/api/v1/auth/logout",
+            // "Who am I" is not "where am I acting". The shell calls this before it can render anything,
+            // and the callers who most need it have no tenant to offer: a user who has just registered and
+            // belongs to nowhere yet, or whose only membership was removed. Scoping it would answer them
+            // 403 and leave them with no way to see their own account. The response reports the token's
+            // tenant only when the membership is still ACTIVE, so this exemption discloses nothing a
+            // tenant-scoped call would have refused.
+            "/api/v1/auth/me",
             "/api/v1/tenants");
 
     /** Everything under it names its tenant in the first path segment rather than in the header. */
@@ -98,8 +105,35 @@ public class TenantContextFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = requestPath(request);
         return TENANT_LESS_PATHS.contains(path)
-                || path.startsWith(INVITATION_TOKEN_PATH_PREFIX)
+                || isTokenAddressedInvitation(path)
                 || path.startsWith(SDK_PATH_PREFIX);
+    }
+
+    /**
+     * True only for the three endpoints an invitee reaches with a token and no tenant context:
+     * {@code /{token}}, {@code /{token}/accept} and {@code /{token}/decline}.
+     *
+     * <p>This used to be a bare {@code startsWith} on the prefix, which was correct while those were the
+     * only paths under it. The admin endpoints added since — {@code /{id}/cancel} and {@code /{id}/resend}
+     * — are the opposite kind of request: they act on an invitation <em>in the caller's tenant</em>, and
+     * exempting them would mean the role checks declared for them in api-security.json were evaluated
+     * against the token's stale roles instead of the acting tenant's membership, and that
+     * {@code X-Tenant-Id} was ignored entirely.
+     */
+    private static boolean isTokenAddressedInvitation(String path) {
+        if (!path.startsWith(INVITATION_TOKEN_PATH_PREFIX)) {
+            return false;
+        }
+        String rest = path.substring(INVITATION_TOKEN_PATH_PREFIX.length());
+        if (rest.isEmpty()) {
+            return false;
+        }
+        int slash = rest.indexOf('/');
+        if (slash < 0) {
+            return true;
+        }
+        String action = rest.substring(slash);
+        return action.equals("/accept") || action.equals("/decline");
     }
 
     /**

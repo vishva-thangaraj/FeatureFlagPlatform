@@ -9,7 +9,9 @@ import com.feature_flag.platform.auth.repository.UserRepository;
 import com.feature_flag.platform.common.security.JwtTokenProvider;
 import com.feature_flag.platform.feature.entity.Env;
 import com.feature_flag.platform.feature.entity.Feature;
+import com.feature_flag.platform.feature.messaging.FeatureChanged;
 import com.feature_flag.platform.feature.repository.EnvRepository;
+import com.feature_flag.platform.feature.repository.FeatureEnvStatusRepository;
 import com.feature_flag.platform.feature.repository.FeatureRepository;
 import com.feature_flag.platform.tenant.entity.Membership;
 import com.feature_flag.platform.tenant.entity.Tenant;
@@ -22,6 +24,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +35,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -44,6 +49,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
+@RecordApplicationEvents
 @Transactional
 class FeatureLifecycleIntegrationTest {
 
@@ -57,6 +63,7 @@ class FeatureLifecycleIntegrationTest {
     @Autowired private RoleRepository roleRepository;
     @Autowired private FeatureRepository featureRepository;
     @Autowired private EnvRepository envRepository;
+    @Autowired private FeatureEnvStatusRepository featureEnvStatusRepository;
 
     private String token;
     private Tenant tenant;
@@ -282,5 +289,82 @@ class FeatureLifecycleIntegrationTest {
     void attributesForAFeatureInTheCallersTenant_is200() throws Exception {
         mockMvc.perform(authorized(get("/api/v1/features/{featureId}/rules/attributes", feature.getId())))
                 .andExpect(status().isOk());
+    }
+
+    // ------------------------------------------------------------------ a flag never toggled in this env
+
+    /**
+     * The targeting tab opens on exactly this state for every new flag. It used to 404, because the
+     * per-environment status row that rules hang off is only created by the enable call.
+     */
+    @Test
+    void rulesAndOverrides_onAnUntouchedFlag_areEmptyNotMissing() throws Exception {
+        mockMvc.perform(authorized(get("/api/v1/features/{f}/envs/{e}/rules", feature.getId(), env.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        mockMvc.perform(authorized(
+                        get("/api/v1/features/{f}/envs/{e}/overrides", feature.getId(), env.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    /** An environment that is not this tenant's is still a 404 -- only the config row may be absent. */
+    @Test
+    void rules_forAnEnvironmentOfAnotherTenant_areNotFound() throws Exception {
+        Tenant other = tenantRepository.save(Tenant.builder().name("Other").build());
+        Env theirEnv = envRepository.save(Env.builder().name("their-prod").tenant(other).build());
+
+        mockMvc.perform(authorized(
+                        get("/api/v1/features/{f}/envs/{e}/rules", feature.getId(), theirEnv.getId())))
+                .andExpect(status().isNotFound());
+    }
+
+    /**
+     * Writing the first rule is itself the act of configuring the flag here, so the row is created on the
+     * way -- and crucially without a STATUS_CHANGED event, which is what the dashboard's old workaround
+     * (a hidden enable {"enabled": false}) would have emitted.
+     */
+    @Test
+    void addingTheFirstRule_createsTheStatusRowWithoutClaimingAStatusChange(ApplicationEvents events)
+            throws Exception {
+        mockMvc.perform(json(post("/api/v1/features/{f}/envs/{e}/rules", feature.getId(), env.getId()),
+                        """
+                        {"attribute":"country","operator":"IN","valueType":"STRING",
+                         "values":["IN","US"],"enabled":true,"priority":0}"""))
+                .andExpect(status().isCreated());
+
+        var status = featureEnvStatusRepository
+                .findByFeatureIdAndEnvId(feature.getId(), env.getId()).orElseThrow();
+        assertThat(status.isEnabled()).isFalse();
+        // Matches what the enable call creates: the percentage is opted into, never silently 0.
+        assertThat(status.getRolloutPercentage()).isEqualTo(100);
+
+        assertThat(events.stream(FeatureChanged.class)
+                .map(changed -> changed.event().getChangeType().name()))
+                .containsExactly("RULE_ADDED");
+    }
+
+    /** The same for the atomic whole-set save the targeting editor actually uses. */
+    @Test
+    void replacingRulesOnAnUntouchedFlag_createsTheStatusRow() throws Exception {
+        mockMvc.perform(json(put("/api/v1/features/{f}/envs/{e}/rules", feature.getId(), env.getId()),
+                        """
+                        {"rules":[{"attribute":"plan","operator":"EQUALS","valueType":"STRING",
+                                   "values":["pro"],"enabled":true,"priority":0}]}"""))
+                .andExpect(status().isOk());
+
+        assertThat(featureEnvStatusRepository.findByFeatureIdAndEnvId(feature.getId(), env.getId()))
+                .isPresent();
+    }
+
+    @Test
+    void settingTheFirstOverrideOnAnUntouchedFlag_createsTheStatusRow() throws Exception {
+        mockMvc.perform(json(post("/api/v1/features/{f}/envs/{e}/overrides", feature.getId(), env.getId()),
+                        "{\"externalUserId\":\"u-123\",\"enabled\":true}"))
+                .andExpect(status().isCreated());
+
+        assertThat(featureEnvStatusRepository.findByFeatureIdAndEnvId(feature.getId(), env.getId()))
+                .isPresent();
     }
 }

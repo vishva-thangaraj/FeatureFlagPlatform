@@ -2,6 +2,7 @@ package com.feature_flag.platform.tenant.controller;
 
 import com.feature_flag.platform.auth.dto.RegisterRequest;
 import com.feature_flag.platform.common.security.TenantUserDetails;
+import com.feature_flag.platform.tenant.dto.InvitationListResponse;
 import com.feature_flag.platform.tenant.dto.InvitationResponse;
 import com.feature_flag.platform.tenant.dto.UserInviteRequest;
 import com.feature_flag.platform.tenant.service.InvitationService;
@@ -57,6 +58,30 @@ public class InvitationController {
     @PostMapping("/{inviteToken}/decline")
     public ResponseEntity<Void> declineInvitation(@PathVariable("inviteToken") String token) {
         invitationService.declineInvitation(token);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * The tenant's outstanding invitations. Addressed by id below, never by token: an admin screen acts on
+     * invitations it can see, and the token belongs to the invitee's inbox.
+     */
+    @GetMapping
+    public ResponseEntity<InvitationListResponse> listInvitations(
+            @AuthenticationPrincipal TenantUserDetails userDetails) {
+        return ResponseEntity.ok(invitationService.listInvitations(userDetails.getTenantId()));
+    }
+
+    @PostMapping("/{invitationId}/cancel")
+    public ResponseEntity<Void> cancelInvitation(@PathVariable Long invitationId,
+                                                 @AuthenticationPrincipal TenantUserDetails userDetails) {
+        invitationService.cancelInvitation(invitationId, userDetails);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{invitationId}/resend")
+    public ResponseEntity<Void> resendInvitation(@PathVariable Long invitationId,
+                                                 @AuthenticationPrincipal TenantUserDetails userDetails) {
+        invitationService.resendInvitation(invitationId, userDetails);
         return ResponseEntity.noContent().build();
     }
 
