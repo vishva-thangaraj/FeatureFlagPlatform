@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -165,7 +166,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 // Memory is finite: once the cap is reached, shed new keys instead of growing towards an OOM.
                 // Every retained bucket is one that is actively consuming tokens.
                 log.debug("Rate limit bucket capacity ({}) reached; rejecting new key", maxBuckets);
-                errorWriter.write(response, HttpStatus.TOO_MANY_REQUESTS, "Rate limit exceeded. Try again later.");
+                // No bucket exists to ask, so the honest answer is this endpoint's own spacing: one
+                // request every 60/requestsPerMinute seconds. This path is server memory pressure rather
+                // than the caller's quota, but telling them to come back at their normal rate is right
+                // either way, and a figure is better than leaving them to guess.
+                reject(response, spacingSeconds(throttle.getRequestsPerMinute()));
                 return;
             }
             bucket = buckets.computeIfAbsent(bucketKey,
@@ -173,11 +178,35 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         if (!bucket.tryConsume(now)) {
-            errorWriter.write(response, HttpStatus.TOO_MANY_REQUESTS, "Rate limit exceeded. Try again later.");
+            reject(response, bucket.secondsUntilNextToken(now));
             return;
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * Refuses the request, saying when to come back.
+     *
+     * <p>{@code Retry-After} is the point of this: a client that is told only "too many requests" has to
+     * guess, and guessing short turns one refusal into several. A dashboard flipping one flag across six
+     * environments hits a 20-per-minute write limit on an ordinary action, so the number has to be real
+     * rather than a fixed constant -- it is read from the bucket that actually refused the request.
+     *
+     * <p>RFC 9110 allows a date here as well as a count of seconds; seconds are used because they need no
+     * clock agreement between us and the caller.
+     */
+    private void reject(HttpServletResponse response, long retryAfterSeconds) throws IOException {
+        response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds));
+        // The body text is deliberately unchanged. Retry-After is the machine-readable half of this
+        // answer and the only part a client should be branching on; putting the figure in the prose too
+        // would alter a response string that callers may already match on, for no gain they can act on.
+        errorWriter.write(response, HttpStatus.TOO_MANY_REQUESTS, "Rate limit exceeded. Try again later.");
+    }
+
+    /** One request every 60/rpm seconds, rounded up, never below one. */
+    private static long spacingSeconds(int requestsPerMinute) {
+        return requestsPerMinute <= 0 ? 60L : Math.max(1L, (long) Math.ceil(60.0 / requestsPerMinute));
     }
 
     /**
@@ -337,6 +366,27 @@ public class RateLimitFilter extends OncePerRequestFilter {
                     return true;
                 }
             }
+        }
+
+        /**
+         * Whole seconds until this bucket holds a token again, never less than one.
+         *
+         * <p>Read after a refused {@code tryConsume}, which has already folded elapsed time into the
+         * state, so {@code lastRefillMs} is the start of the interval currently being earned and the wait
+         * is the rest of that interval. Rounded up: rounding down would invite a retry that arrives a
+         * fraction of a second early and is refused again. Never zero, because "retry immediately" is not
+         * something a rate limiter can mean.
+         */
+        long secondsUntilNextToken(long now) {
+            if (refillIntervalMs >= Double.MAX_VALUE) {
+                return 60L; // requestsPerMinute <= 0: the bucket never refills, so pick a sane interval
+            }
+            State current = state.get();
+            double waitMs = refillIntervalMs - Math.max(0L, now - current.lastRefillMs());
+            if (waitMs <= 0) {
+                return 1L;
+            }
+            return Math.max(1L, (long) Math.ceil(waitMs / 1000.0));
         }
 
         /** True when the bucket is back at full allowance, i.e. it carries no state worth keeping. */

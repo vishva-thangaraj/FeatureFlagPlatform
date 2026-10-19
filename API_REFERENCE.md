@@ -117,7 +117,43 @@ All errors return this shape:
 }
 ```
 
-Validation errors (400) include field-level details in the `message` field.
+### Validation errors
+
+A `400` from validation carries the same joined summary in `message` **and** a structured breakdown in
+`fieldErrors`:
+
+```json
+{
+  "status": 400,
+  "error": "Bad Request",
+  "message": "key: must start with a letter..., description: size must be between 0 and 255",
+  "timestamp": "2026-10-19T10:00:00Z",
+  "fieldErrors": [
+    { "field": "key", "message": "must start with a letter..." },
+    { "field": "description", "message": "size must be between 0 and 255" }
+  ]
+}
+```
+
+- `fieldErrors` is **additive**. `message` is unchanged, so anything already displaying it keeps working.
+- A `field` is **absent** when the constraint belongs to the request rather than to one input — a
+  class-level rule such as "start must precede end". Render those at the top of the form.
+- `fieldErrors` itself is **absent**, not empty, on errors that are not about input. Do not treat a
+  missing array and an empty one as the same thing.
+
+### Rate limiting
+
+A `429` carries **`Retry-After`**, in seconds:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 6
+```
+
+It is read from the bucket that actually refused the request, so it is the real wait, not a fixed
+constant. Honour it rather than guessing — writes allow 20 a minute with a burst of 5, which an ordinary
+action can reach (flipping one flag across six environments), and retrying early simply spends the next
+allowance on another refusal. The value is never `0`.
 
 ---
 

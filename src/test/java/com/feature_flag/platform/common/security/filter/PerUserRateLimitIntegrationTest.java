@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.http.HttpHeaders;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,7 +18,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -99,5 +102,35 @@ class PerUserRateLimitIntegrationTest {
         mockMvc.perform(createTenant(tokenA, "A overflow")).andExpect(status().isTooManyRequests());
 
         mockMvc.perform(createTenant(tokenB, "B first")).andExpect(status().isCreated());
+    }
+
+    /**
+     * A 429 that does not say when to come back leaves the caller guessing, and guessing short turns one
+     * refusal into several. {@code POST /api/v1/tenants} allows 10 a minute, so the bucket earns a token
+     * every six seconds: the header must be a real figure read from that bucket, not a fixed constant.
+     */
+    @Test
+    void throttledResponse_saysWhenToComeBack() throws Exception {
+        for (int i = 0; i < CREATE_TENANT_BURST; i++) {
+            mockMvc.perform(createTenant(tokenA, "Burst " + i)).andExpect(status().isCreated());
+        }
+
+        String retryAfter = mockMvc.perform(createTenant(tokenA, "One Too Many"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists(HttpHeaders.RETRY_AFTER))
+                .andReturn().getResponse().getHeader(HttpHeaders.RETRY_AFTER);
+
+        // RFC 9110 delta-seconds: a bare count, and never 0 -- "retry immediately" is not something a
+        // rate limiter can mean.
+        long seconds = Long.parseLong(retryAfter);
+        assertThat(seconds).isBetween(1L, 6L);
+    }
+
+    /** Nothing is promised about the header on a response that was not refused. */
+    @Test
+    void successfulResponse_carriesNoRetryAfter() throws Exception {
+        mockMvc.perform(createTenant(tokenA, "Fine"))
+                .andExpect(status().isCreated())
+                .andExpect(header().doesNotExist(HttpHeaders.RETRY_AFTER));
     }
 }
