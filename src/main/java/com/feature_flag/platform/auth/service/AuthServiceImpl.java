@@ -1,6 +1,7 @@
 package com.feature_flag.platform.auth.service;
 
 import com.feature_flag.platform.auth.dto.AuthResponse;
+import com.feature_flag.platform.auth.dto.MeResponse;
 import com.feature_flag.platform.auth.dto.LoginRequest;
 import com.feature_flag.platform.auth.dto.RegisterRequest;
 import com.feature_flag.platform.auth.dto.SwitchTenantRequest;
@@ -189,6 +190,40 @@ public class AuthServiceImpl implements AuthService {
 
         return tokenService.createTokenPair(user, membership.getTenant(),
                 tenantMembershipResolver.roleNames(membership));
+    }
+
+    /**
+     * Deliberately forgiving about the tenant. A removed or inactive membership answers "you have no
+     * current tenant" rather than 403: this is the call the shell makes before it can render anything, and
+     * failing it would leave a user who has just been removed from their only tenant staring at an error
+     * page instead of the tenant picker. Every tenant-scoped endpoint still refuses them.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public MeResponse me(Long userId, Long tenantId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        I18N.getMessage(Messages.RESOURCE_USER_NOT_FOUND)));
+
+        Long activeTenantId = null;
+        List<String> roles = List.of();
+
+        if (tenantId != null) {
+            Optional<Membership> membership = membershipRepository.findByUserIdAndTenantId(userId, tenantId);
+            if (membership.isPresent() && membership.get().getStatus() == MembershipStatus.ACTIVE) {
+                activeTenantId = tenantId;
+                roles = tenantMembershipResolver.roleNames(membership.get());
+            }
+        }
+
+        return new MeResponse(
+                String.valueOf(user.getId()),
+                user.getEmail(),
+                user.getFirstName(),
+                user.getLastName(),
+                user.getStatus(),
+                activeTenantId == null ? null : String.valueOf(activeTenantId),
+                roles);
     }
 
     @Override

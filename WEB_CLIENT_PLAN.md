@@ -21,47 +21,82 @@ break every request after login.
 
 ## Part 0 — Backend findings that shape the client
 
-### Must fix first
+### Must fix first — done in `fix/web-client-blockers`
 
-**1. 64-bit IDs are sent as JSON numbers, and JavaScript rounds them.**
+All three are fixed. The reasoning is kept here because the client depends on the outcomes.
+
+**1. 64-bit IDs were sent as JSON numbers, and JavaScript rounds them.** ✅
 `AuthResponse.userId` and `.tenantId`, `MemberResponse.membershipId` and `.userID`, and `RoleResponse.id`
-are all `Long`. So is the `tenantId` claim in the JWT (`JwtTokenProvider.java:58`). TSIDs are about
-4.6 × 10¹⁷. `Number.MAX_SAFE_INTEGER` is about 9.0 × 10¹⁵. `JSON.parse` silently rounds the value, so
-the tenant id the client reads after login is the id of no tenant. Every request then sends a wrong
-`X-Tenant-Id` and gets a `403`.
+were all `Long`, as was the `tenantId` claim in the JWT. TSIDs are about 4.6 × 10¹⁷;
+`Number.MAX_SAFE_INTEGER` is about 9.0 × 10¹⁵, so `JSON.parse` silently rounded them — the tenant id the
+client read after login was the id of no tenant, and every request built from it `403`ed.
 
-The rest of the API already gets this right. `TenantResponse.id` and `ApiKeyResponse.id` are strings,
-and API_REFERENCE.md explains why under API keys. Make these fields `String` too, and write the claim
-as a string. Request bodies such as `SwitchTenantRequest.tenantId` and `FeatureEnableRequest.envId`
-can stay `Long`, because Jackson accepts quoted numbers by default. Pin that with a test that uses a
-real TSID, so nobody turns coercion off later without noticing.
+All five fields and the claim are `String` now, matching `TenantResponse.id` and `ApiKeyResponse.id`,
+which already did this. Request bodies stay `Long`: Jackson coerces a quoted number, so the client can
+hold every id as a string and send it back unchanged. `TsidJsonContractTest` pins both directions with a
+real TSID. `JwtAuthenticationFilter` still accepts the old numeric claim, so tokens minted before the
+deploy keep working for their remaining 15 minutes rather than logging everyone out at once.
 
-**2. `ENVService.deleteEnv` runs in a read-only transaction** (`ENVService.java:116`,
-`@Transactional(readOnly = true)`). Depending on the driver, the deletes either fail or are never
-flushed. Either way the environment stays. It also leaves API keys bound to the environment in place,
-and `ApiKey.env` is `optional = false`, so once any key exists the delete fails on a foreign key.
-Decide whether deleting an environment revokes its keys or is refused while keys exist. Then fix it
-and test it before the UI shows a delete button.
+**→ For the client:** ids are opaque strings. Never `Number()`, never `parseInt`, compare as strings.
 
-**3. API_REFERENCE.md is wrong in exactly the places the UI depends on.**
-- **Accepting an invitation.** The doc says the response is `{message, registered}`. The code returns
-  `{message, status, authResponse}`. An invitee with no account sends a `RegisterRequest` body to
-  `/invitations/{token}/accept`, not to `/auth/register`.
-- **Missing endpoints.** Features, environments, the `enable` call and members are not documented.
-- **Database.** The doc says PostgreSQL with Flyway. The app runs MySQL with `ddl-auto`.
+**2. Deleting an environment failed once it had API keys.** ✅
 
-Add **springdoc-openapi**, exposed in the `dev` profile only, and generate TypeScript types from
-`/v3/api-docs` with `openapi-typescript`. A contract change then becomes a type error in `web/` in the
-same merge request, not a bug report.
+> This item previously said `deleteEnv` ran in a read-only transaction. That was already untrue when
+> this plan was written — `ENVService.deleteEnv` is plain `@Transactional` and explicitly cascades the
+> per-environment status rows, their rules and their overrides. The real blocker was the other half of
+> the item: `ApiKey.env` is `optional = false`, and nothing deleted or detached the keys, so any
+> environment that had ever been issued a key failed on a foreign key.
 
-### Needed by the phase that uses them
+`DELETE /api/v1/envs/{id}` now returns **409** while the environment has any key that has not been
+revoked, and deletes already-revoked rows along with the environment. Refusing rather than cascading,
+because an API key is a credential inside a customer's running system: deleting the environment under it
+would stop their SDK with no warning and no auditable act of revocation. Expired-but-unrevoked keys do
+not block it — they are already inert.
 
-| # | Gap | Why the UI needs it | Phase |
-|---|-----|---------------------|-------|
-| 4 | No `GET /api/v1/auth/me` | The JWT carries no name, so the account menu has nothing to show | 1 |
-| 5 | Rules and overrides `404` until the flag has been toggled once in that environment (`findFeatureEnvStatus`) | Opening the "Targeting" tab for a new flag fails. Create the row on the first rule or override write. The UI alternative (a hidden `enable {enabled:false}`) publishes a `STATUS_CHANGED` event nobody asked for | 3 |
-| 6 | `MemberResponse` has no `email` | The members table cannot show who someone is | 4 |
-| 7 | No endpoint to list, cancel or resend pending invitations (`CANCELLED` exists but is never set) | Admins cannot see outstanding invites | 4 |
+**→ For the client:** the environment delete needs a 409 path that lists the blocking keys and links to
+revoke them, not a generic error toast.
+
+**3. API_REFERENCE.md disagreed with the code where the UI depends on it.** ✅
+Corrected: the invitation accept contract (`{message, status, authResponse}`, with the
+`PENDING_UNREGISTERED` → register → accept round trip), the database line (MySQL with `ddl-auto`, not
+PostgreSQL with Flyway), and the `tenantId` claim type. Added: `Members`, `Environments` and `Features`
+sections, an `Ids` section explaining the 2^53 problem, and a note that `POST /features/{id}/enable` is
+what creates the per-environment status row.
+
+**springdoc-openapi** serves `/v3/api-docs` and `/swagger-ui.html` on the `dev` **and `docker`** profiles
+— `docker` too, because `dev` is only the bootRun fallback and the compose stack runs `docker`, so
+dev-only would have meant the document did not exist where the team runs the app. `prod` and `staging`
+inherit `springdoc.api-docs.enabled=false`, and `OpenApiConfig` (which carries the permit rule those
+paths need) is not loaded there at all.
+
+Generate the client's types rather than hand-writing them:
+
+```bash
+npx openapi-typescript http://localhost:8080/v3/api-docs -o web/src/api/schema.d.ts
+```
+
+### Needed by the phase that uses them — done
+
+All four landed with the must-fix work. What the client can now rely on:
+
+| # | Gap | Resolved as | Phase |
+|---|-----|-------------|-------|
+| 4 | No `GET /api/v1/auth/me` | Added, and deliberately **not** tenant-scoped: it answers a user with no tenant, and one whose membership was removed, with `tenantId: null` instead of 403. Roles come from the membership, not the token claim | 1 |
+| 5 | Rules and overrides `404` until the flag had been toggled once in that environment | Reads answer `200 []`; the first rule or override write creates the per-environment row. **No `STATUS_CHANGED` event** is published for that creation — only the rule/override event for the change that actually happened | 3 |
+| 6 | `MemberResponse` had no `email` | Added. `lastName` is optional and first names collide, so it is what identifies a person in the table | 4 |
+| 7 | No way to list, cancel or resend invitations | `GET /api/v1/invitations`, `POST /{id}/cancel`, `POST /{id}/resend`, all OWNER/ADMIN and addressed by **id**, not token | 4 |
+
+Three consequences worth designing around:
+
+- **The invitation list reports `EXPIRED` for rows still stored as `PENDING`.** Status is computed
+  against the clock, so the list shows what is actually actionable. Offer *resend* on those.
+- **Resending mints a new token and invalidates the old link.** Only the hash is stored, so the original
+  is unrecoverable — say so in the UI ("a new link will be sent; the previous one stops working").
+- **Cancel is what frees an address.** A live `PENDING` invitation makes re-inviting that address a 409,
+  so the "invite" form's 409 path should offer to cancel the outstanding one.
+
+A fourth, for the targeting screen: `GET …/rules` returning `[]` means *no rules*, while `404` means the
+feature or environment does not exist in this tenant. Do not collapse them into one error state.
 
 ### Recommended
 

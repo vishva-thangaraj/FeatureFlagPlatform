@@ -35,6 +35,7 @@ public class MembershipListResponseMapper {
         return new MemberResponse(
                 String.valueOf(membership.getId()),
                 String.valueOf(user.getId()),
+                user.getEmail(),
                 user.getFirstName(),
                 user.getLastName(),
                 roleResponses,
