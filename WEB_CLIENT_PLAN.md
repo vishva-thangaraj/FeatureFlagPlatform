@@ -100,6 +100,8 @@ feature or environment does not exist in this tenant. Do not collapse them into 
 
 ### Recommended
 
+8 is still open; 9 and 10 are done.
+
 **8. Move the refresh token into an httpOnly cookie.** Today it comes back in the JSON body, so the
 browser has to keep it somewhere JavaScript can read. Any XSS bug then walks off with a 7-day
 credential. Because the app is served from the same origin, the cookie is cheap:
@@ -107,13 +109,14 @@ credential. Because the app is served from the same origin, the cookie is cheap:
 Until this lands, the client keeps the refresh token in `localStorage` behind one module, so the
 switch is a one-file change.
 
-**9. Send structured validation errors.** Today the field errors arrive joined into one string:
-`"key: must match …, description: size must be …"`. Add `fieldErrors: [{field, message}]` next to
-`message`. The change is additive, and forms can then put each error under its own field.
+**9. Structured validation errors.** ✅ `fieldErrors: [{field, message}]` sits next to `message`, which
+is unchanged — the change is additive. A **missing `field`** means the constraint belongs to the request
+rather than to one input (a class-level rule), so render it at the top of the form. `fieldErrors` is
+**absent rather than empty** on errors that are not about input; do not conflate the two.
 
-**10. Send `Retry-After` on `429`.** Writes are limited to 20 per minute with a burst of 5. A user
-flipping one flag across six environments hits that limit. The client should back off for exactly
-as long as the server asks, not guess.
+**10. `Retry-After` on `429`.** ✅ Sent as a count of seconds, read from the bucket that refused the
+request rather than a fixed constant, and never `0`. The client backs off for exactly that long. The body
+text is deliberately unchanged, so `Retry-After` is the only thing to branch on.
 
 ---
 
