@@ -167,9 +167,9 @@ nginx/                                  dev and production server config
 | [API_REFERENCE.md](API_REFERENCE.md) | Every endpoint, and the reasoning behind the awkward ones |
 | [docs/sdk-quickstart.md](docs/sdk-quickstart.md) | Getting an SDK talking, and rotating its key without an outage |
 | [docs/feature-events.md](docs/feature-events.md) | The Kafka event contract |
-| [deploy/README.md](deploy/README.md) · [CICD_GUIDE.md](CICD_GUIDE.md) | Pipeline and deployment |
-| [WEB_CLIENT_PLAN.md](WEB_CLIENT_PLAN.md) | The dashboard, planned but not yet built |
-| [TARGETING_PLAN.md](TARGETING_PLAN.md) · [KAFKA_TEACHING_PLAN.md](KAFKA_TEACHING_PLAN.md) | Design and teaching notes |
+| [deploy/README.md](deploy/README.md) | The pipeline, the deploy script, and how to roll back |
+| [WEB_CLIENT_PLAN.md](WEB_CLIENT_PLAN.md) | The dashboard — planned, not yet built |
+| [REALTIME_CONFIG_PLAN.md](REALTIME_CONFIG_PLAN.md) | Pushing config changes to connected SDKs — planned, not yet built |
 
 ## Deploying
 
