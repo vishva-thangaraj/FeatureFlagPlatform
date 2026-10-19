@@ -1,7 +1,9 @@
 package com.feature_flag.platform.common.exception;
 
 import com.feature_flag.platform.common.dto.ErrorResponse;
+import com.feature_flag.platform.common.dto.ValidationError;
 import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.Path;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -110,36 +112,52 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
         List<String> messages = new ArrayList<>();
-        ex.getBindingResult().getFieldErrors()
-                .forEach(fe -> messages.add(fe.getField() + ": " + fe.getDefaultMessage()));
-        ex.getBindingResult().getGlobalErrors()
-                .forEach(ge -> messages.add(globalErrorText(ge)));
+        List<ValidationError> fieldErrors = new ArrayList<>();
+
+        ex.getBindingResult().getFieldErrors().forEach(fe -> {
+            messages.add(fe.getField() + ": " + fe.getDefaultMessage());
+            fieldErrors.add(new ValidationError(fe.getField(), fe.getDefaultMessage()));
+        });
+        ex.getBindingResult().getGlobalErrors().forEach(ge -> {
+            messages.add(globalErrorText(ge));
+            // Null field: a class-level constraint belongs to the request, not to one input.
+            fieldErrors.add(new ValidationError(null, ge.getDefaultMessage()));
+        });
 
         String message = messages.isEmpty() ? VALIDATION_FAILED_MESSAGE : String.join(", ", messages);
         log.debug("Request validation failed -> 400: {}", message);
-        return buildResponse(HttpStatus.BAD_REQUEST, message);
+        return buildResponse(HttpStatus.BAD_REQUEST, message, fieldErrors);
     }
 
     /** Validation on {@code @Validated} controller method parameters / path and request params. */
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ErrorResponse> handleConstraintViolation(ConstraintViolationException ex) {
-        String message = ex.getConstraintViolations() == null || ex.getConstraintViolations().isEmpty()
-                ? VALIDATION_FAILED_MESSAGE
-                : ex.getConstraintViolations().stream()
-                        .map(cv -> cv.getPropertyPath() + ": " + cv.getMessage())
-                        .collect(Collectors.joining(", "));
+        if (ex.getConstraintViolations() == null || ex.getConstraintViolations().isEmpty()) {
+            log.debug("Constraint violation -> 400: {}", VALIDATION_FAILED_MESSAGE);
+            return buildResponse(HttpStatus.BAD_REQUEST, VALIDATION_FAILED_MESSAGE, List.of());
+        }
+
+        String message = ex.getConstraintViolations().stream()
+                .map(cv -> cv.getPropertyPath() + ": " + cv.getMessage())
+                .collect(Collectors.joining(", "));
+        List<ValidationError> fieldErrors = ex.getConstraintViolations().stream()
+                .map(cv -> new ValidationError(leafOf(cv.getPropertyPath()), cv.getMessage()))
+                .toList();
+
         log.debug("Constraint violation -> 400: {}", message);
-        return buildResponse(HttpStatus.BAD_REQUEST, message);
+        return buildResponse(HttpStatus.BAD_REQUEST, message, fieldErrors);
     }
 
     /** Spring 6.1 method-validation failures (e.g. {@code @RequestParam @Min(1) int page}). */
     @ExceptionHandler(HandlerMethodValidationException.class)
     public ResponseEntity<ErrorResponse> handleHandlerMethodValidation(HandlerMethodValidationException ex) {
         List<String> messages = new ArrayList<>();
+        List<ValidationError> fieldErrors = new ArrayList<>();
         ex.getParameterValidationResults().forEach(result -> result.getResolvableErrors().forEach(error -> {
             String text = error.getDefaultMessage();
             String name = result.getMethodParameter().getParameterName();
             messages.add(name == null ? String.valueOf(text) : name + ": " + text);
+            fieldErrors.add(new ValidationError(name, text));
         }));
 
         String message = messages.isEmpty() ? VALIDATION_FAILED_MESSAGE : String.join(", ", messages);
@@ -286,5 +304,28 @@ public class GlobalExceptionHandler {
     private ResponseEntity<ErrorResponse> buildResponse(HttpStatus status, String message) {
         ErrorResponse error = new ErrorResponse(status.value(), status.getReasonPhrase(), message, Instant.now());
         return ResponseEntity.status(status).body(error);
+    }
+
+    /**
+     * As above, plus the per-field breakdown. Only validation handlers pass one: everywhere else the error
+     * is not about a particular input, and {@code fieldErrors} is omitted from the body entirely rather
+     * than sent as an empty list that a client would have to distinguish from a real one.
+     */
+    private ResponseEntity<ErrorResponse> buildResponse(HttpStatus status, String message,
+                                                        List<ValidationError> fieldErrors) {
+        ErrorResponse error = new ErrorResponse(
+                status.value(), status.getReasonPhrase(), message, Instant.now(), fieldErrors);
+        return ResponseEntity.status(status).body(error);
+    }
+
+    /**
+     * The last node of a constraint's property path. Jakarta reports it as the whole invocation --
+     * {@code updateEnv.request.name} -- and only the tail names something a form has an input for.
+     */
+    private static String leafOf(Path propertyPath) {
+        String text = String.valueOf(propertyPath);
+        int lastDot = text.lastIndexOf('.');
+        String leaf = lastDot < 0 ? text : text.substring(lastDot + 1);
+        return leaf.isBlank() ? null : leaf;
     }
 }

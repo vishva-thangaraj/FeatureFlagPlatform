@@ -188,6 +188,48 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.message", containsString("name")));
     }
 
+    /**
+     * The structured half of a validation failure. {@code message} keeps the joined sentence it always
+     * carried -- this is additive -- but a form needs each complaint attached to the input that caused it,
+     * and splitting that sentence back apart was the client's only option before.
+     */
+    @Test
+    void fieldLevelValidationError_isAlsoReportedPerField() throws Exception {
+        mockMvc.perform(post("/boom/echo")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"\",\"other\":\"x\"}"))
+                .andExpect(status().isBadRequest())
+                // unchanged for anything already reading it
+                .andExpect(jsonPath("$.message", containsString("name")))
+                .andExpect(jsonPath("$.fieldErrors").isArray())
+                .andExpect(jsonPath("$.fieldErrors[?(@.field == 'name')]").isNotEmpty())
+                .andExpect(jsonPath("$.fieldErrors[?(@.field == 'name')].message").isNotEmpty());
+    }
+
+    /** A class-level constraint belongs to the request, not to an input, so it carries no field. */
+    @Test
+    void classLevelValidationError_isReportedWithANullField() throws Exception {
+        mockMvc.perform(post("/boom/echo")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"same\",\"other\":\"same\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors").isArray())
+                .andExpect(jsonPath("$.fieldErrors[0].field").doesNotExist())
+                .andExpect(jsonPath("$.fieldErrors[0].message",
+                        containsString("name and other must differ")));
+    }
+
+    /**
+     * fieldErrors is omitted, not sent empty, when the error is not about input -- a client should not
+     * have to tell an empty list apart from a real one.
+     */
+    @Test
+    void nonValidationError_carriesNoFieldErrors() throws Exception {
+        mockMvc.perform(get("/boom/conflict"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.fieldErrors").doesNotExist());
+    }
+
     @Test
     void constraintViolationException_is400() throws Exception {
         mockMvc.perform(get("/boom/constraint-violation"))
