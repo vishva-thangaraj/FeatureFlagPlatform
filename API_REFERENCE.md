@@ -64,6 +64,53 @@ The `roles` claim is informational only. Authorization always re-reads the calle
 membership in the tenant the request actually targets, so a role change or removed membership takes effect
 on the caller's next request rather than when their token expires.
 
+### Refresh-token transport
+
+By default the refresh token is returned in the JSON body, and that is unchanged for every existing
+client. A client that can hold cookies may instead ask for it as an `HttpOnly` cookie:
+
+```
+X-Refresh-Transport: cookie
+```
+
+Send that on `register`, `login` or `switch-tenant` (and on `POST /api/v1/invitations/{token}/accept`,
+which also hands back a session). The response then carries:
+
+```
+Set-Cookie: refresh_token=...; Max-Age=604800; Path=/api/v1/auth; Secure; HttpOnly; SameSite=Strict
+```
+
+and **`refreshToken` is absent from the body**. That absence is the point: if the body still carried it,
+injected script could call `/refresh`, read the rotated token out of the response and carry it off, and
+the cookie would be protecting nothing.
+
+On `refresh` and `logout` the cookie's own presence is the request — a browser sends **no body at all**,
+and the header is unnecessary. `logout` expires the cookie as well as revoking the token.
+
+| Endpoint | Body token | Cookie |
+|----------|-----------|--------|
+| `register`, `login`, `switch-tenant`, invitation `accept` | unless the header is sent | with the header |
+| `refresh` | accepted | accepted, and preferred when present |
+| `logout` | accepted | accepted, and always cleared |
+
+**What this protects against, precisely.** In the body, the token has to live somewhere JavaScript can
+reach, so one XSS bug hands an attacker a seven-day credential they can use from their own machine long
+after the tab is closed. `HttpOnly` does **not** stop script on the page from *using* the session — the
+browser attaches the cookie to a `/refresh` the attacker triggers. It stops **exfiltration**: the attacker
+is confined to the victim's browser while the page is open, instead of walking away with the credential.
+That is the whole claim.
+
+`SameSite=Strict` is what keeps a cookie from reintroducing CSRF, and it costs nothing here because the
+dashboard is served from the same origin as the API. `Path=/api/v1/auth` means the credential is attached
+to the two calls that need it rather than to every request.
+
+> **`Secure` is on by default**, so the cookie is dropped on a plaintext connection. Browsers exempt
+> `localhost`, so local development needs no change; any other deployment serving `http://` must either
+> terminate TLS or set `REFRESH_COOKIE_SECURE=false`, which puts a seven-day credential on the wire in
+> clear text. A deployment that needs that override is a deployment that needs TLS.
+
+---
+
 ### Tenant context (`X-Tenant-Id`)
 
 Every tenant-scoped endpoint acts on exactly one tenant. Which one is decided per request:
@@ -248,7 +295,11 @@ Authenticate an existing user.
 
 Rotate a refresh token and get new access + refresh tokens.
 
-**Request:**
+**Request:** the body is **optional** — a caller on
+[cookie transport](#refresh-token-transport) sends the token in its cookie and no body at all. One of
+the two must carry it, or the call is a `401`.
+
+**Body:**
 
 ```json
 {
@@ -273,7 +324,9 @@ Rotate a refresh token and get new access + refresh tokens.
 
 #### `POST /api/v1/auth/logout` (Protected)
 
-Revoke a refresh token.
+Revoke a refresh token. As with `refresh`, the body is optional when the
+[refresh cookie](#refresh-token-transport) is present, and the cookie is expired on the way out whether
+or not this caller used one.
 
 **Request:**
 
