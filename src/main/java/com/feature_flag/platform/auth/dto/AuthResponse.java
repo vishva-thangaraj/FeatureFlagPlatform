@@ -1,6 +1,7 @@
 package com.feature_flag.platform.auth.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.util.List;
 
@@ -28,10 +29,10 @@ public record AuthResponse(
          * a null value and an absent key are different answers there.
          */
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        String refreshToken,
+        @Schema(nullable = true) String refreshToken,
         String userId,
         String email,
-        String tenantId,
+        @Schema(nullable = true) String tenantId,
         List<String> roles,
         long accessTokenExpiresIn
 ) {

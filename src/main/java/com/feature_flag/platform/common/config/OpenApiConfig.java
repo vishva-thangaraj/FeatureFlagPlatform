@@ -4,6 +4,7 @@ import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.security.SecurityScheme;
+import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -87,5 +88,11 @@ public class OpenApiConfig {
                                 .in(SecurityScheme.In.HEADER)
                                 .name("X-API-Key")
                                 .description("Environment-scoped SDK key. Only the /api/v1/sdk/ paths take it.")));
+    }
+
+    /** Ids as strings, and which response fields are always present: see {@link DashboardContractCustomizer}. */
+    @Bean
+    public OpenApiCustomizer dashboardContractCustomizer() {
+        return new DashboardContractCustomizer();
     }
 }

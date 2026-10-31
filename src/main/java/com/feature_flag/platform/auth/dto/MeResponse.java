@@ -1,6 +1,7 @@
 package com.feature_flag.platform.auth.dto;
 
 import com.feature_flag.platform.auth.enums.UserStatus;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.util.List;
 
@@ -21,9 +22,9 @@ public record MeResponse(
         String userId,
         String email,
         String firstName,
-        String lastName,
+        @Schema(nullable = true) String lastName,
         UserStatus status,
-        String tenantId,
+        @Schema(nullable = true) String tenantId,
         List<String> roles
 ) {
 }
