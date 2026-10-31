@@ -1,5 +1,7 @@
 package com.feature_flag.platform.tenant.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.time.Instant;
 
 /**
@@ -16,8 +18,8 @@ public record ApiKeyResponse(
         String envName,
         String prefix,
         Instant createdAt,
-        Instant lastUsedAt,
-        Instant expiresAt,
-        Instant revokedAt
+        @Schema(nullable = true) Instant lastUsedAt,
+        @Schema(nullable = true) Instant expiresAt,
+        @Schema(nullable = true) Instant revokedAt
 ) {
 }

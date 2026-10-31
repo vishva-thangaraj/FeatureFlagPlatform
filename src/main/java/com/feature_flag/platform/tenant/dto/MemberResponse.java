@@ -1,6 +1,7 @@
 package com.feature_flag.platform.tenant.dto;
 
 import com.feature_flag.platform.tenant.enums.MembershipStatus;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.util.List;
 
@@ -19,7 +20,7 @@ public record MemberResponse(
        String userID,
        String email,
        String firstName,
-       String lastName,
+       @Schema(nullable = true) String lastName,
        List<RoleResponse> roles,
        MembershipStatus status
 ) {

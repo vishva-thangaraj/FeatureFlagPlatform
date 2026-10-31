@@ -8,6 +8,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -47,8 +51,44 @@ class OpenApiDocumentIntegrationTest {
     void idsAreDescribedAsStrings() throws Exception {
         mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.components.schemas.AuthResponse.properties.tenantId.type").value("string"))
+                // ["string", "null"]: a caller with no default tenant gets null.
+                .andExpect(jsonPath("$.components.schemas.AuthResponse.properties.tenantId.type", hasItem("string")))
                 .andExpect(jsonPath("$.components.schemas.AuthResponse.properties.userId.type").value("string"))
                 .andExpect(jsonPath("$.components.schemas.MemberResponse.properties.membershipId.type").value("string"));
+    }
+
+    /**
+     * The other direction. Path variables and request fields stay {@code Long} on the server, but a client
+     * generated from a document that calls them int64 would hold a TSID in a JavaScript number to send it.
+     */
+    @Test
+    @DisplayName("ids the dashboard sends are described as strings, and durations stay numbers")
+    void sentIdsAreDescribedAsStrings() throws Exception {
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paths['/api/v1/features/{featureId}'].get.parameters[?(@.name == 'featureId')].schema.type",
+                        hasItem("string")))
+                .andExpect(jsonPath("$.components.schemas.FeatureEnableRequest.properties.envId.type").value("string"))
+                .andExpect(jsonPath("$.components.schemas.LoginRequest.properties.tenantId.type").value("string"))
+                .andExpect(jsonPath("$.components.schemas.AuthResponse.properties.accessTokenExpiresIn.type").value("integer"));
+    }
+
+    /**
+     * Without this every response field is optional in the generated types, and the dashboard guards
+     * fields the server always sends. Only fields marked nullable may be null or absent.
+     */
+    @Test
+    @DisplayName("response fields are required unless marked nullable, and request schemas are left alone")
+    void responseFieldsAreRequiredUnlessNullable() throws Exception {
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.components.schemas.FeatureResponse.required", containsInAnyOrder("id", "key", "createdAt")))
+                .andExpect(jsonPath("$.components.schemas.FeatureResponse.properties.description.type",
+                        containsInAnyOrder("string", "null")))
+                .andExpect(jsonPath("$.components.schemas.AuthResponse.required", not(hasItem("refreshToken"))))
+                .andExpect(jsonPath("$.components.schemas.InvitationResponse.properties.authResponse.oneOf[0]['$ref']")
+                        .value("#/components/schemas/AuthResponse"))
+                .andExpect(jsonPath("$.components.schemas.InvitationResponse.properties.authResponse.oneOf[1].type").value("null"))
+                .andExpect(jsonPath("$.components.schemas.CreateFeatureRequest.required", contains("key")));
     }
 }

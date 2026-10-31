@@ -41,7 +41,9 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-mail")
 	implementation("io.hypersistence:hypersistence-utils-hibernate-63:3.9.0")
 	implementation("org.apache.avro:avro:1.11.4")
-	implementation("io.confluent:kafka-avro-serializer:7.7.1")
+	implementation("io.confluent:kafka-avro-serializer:7.7.1") {
+		exclude(group = "io.swagger.core.v3", module = "swagger-annotations")
+	}
 	implementation("org.springframework.kafka:spring-kafka")
 	implementation("org.springframework.boot:spring-boot-starter-websocket")
 	// OpenAPI description of the REST surface, served only under the dev and docker profiles

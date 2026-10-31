@@ -2,6 +2,7 @@ package com.feature_flag.platform.tenant.dto;
 
 import com.feature_flag.platform.auth.enums.RoleName;
 import com.feature_flag.platform.tenant.enums.InvitationStatus;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
 
@@ -21,7 +22,7 @@ public record InvitationSummary(
         String email,
         RoleName role,
         InvitationStatus status,
-        String invitedByEmail,
+        @Schema(nullable = true) String invitedByEmail,
         Instant createdAt,
         Instant expiresAt
 ) {
