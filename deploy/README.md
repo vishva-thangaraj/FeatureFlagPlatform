@@ -26,9 +26,13 @@ keeps no inbound rule for deployment at all, and the runner authenticates to AWS
 /opt/platform/
 ├── docker-compose.yml     ← deploy/docker-compose.prod.yml
 ├── deploy.sh              ← deploy/deploy.sh        (root:root, 755)
+├── deploy-ui.sh           ← deploy/deploy-ui.sh     (root:root, 755)
 ├── tls-bootstrap.sh       ← deploy/tls-bootstrap.sh  (root:root, 755)
+├── tls-add-domain.sh      ← deploy/tls-add-domain.sh (root:root, 755)
 ├── .env                   ← non-secret config       (ec2-user, 600)
-└── nginx/prod.conf.template  ← nginx/prod.conf.template
+├── nginx/prod.conf.template  ← nginx/prod.conf.template
+├── nginx/ui.conf.template    ← nginx/ui.conf.template
+└── ui/                    ← dashboard releases, written by deploy-ui.sh
 ```
 
 `deploy.sh` is invoked by the SSM agent, which runs as root, so it must be root-owned and
@@ -131,6 +135,147 @@ Two notes on the config:
   leave it off until the certificate has renewed successfully at least once.
 - **The ACME challenge location must stay on plain HTTP** and must not be redirected. It is
   how Let's Encrypt proves domain control on every renewal.
+
+## Dashboard
+
+The dashboard ([feature-platform-ui](https://github.com/vishva-thangaraj/featureflag-ui)) is
+served by the same nginx, on its own hostname, from [`nginx/ui.conf.template`](../nginx/ui.conf.template).
+That server block serves the static build and proxies `/api/` straight to the app, so the browser
+sees one origin:
+
+```
+https://featureflag.example.com/          → /opt/platform/ui/current (static files)
+https://featureflag.example.com/api/...   → app:8080 (same as https://api.example.com/api/...)
+```
+
+Same origin is what the backend is built for, and why nothing else needs configuring for it: the UI
+calls the API at `window.location.origin`, the refresh cookie stays `SameSite=Strict` on
+`/api/v1/auth`, there is no CORS configuration to add, and nginx is still the only proxy appending to
+`X-Forwarded-For`, so `RATE_LIMIT_PROXY_HOPS` stays `1`. Serving the UI from S3/CloudFront instead
+would make it cross-origin (or add a second appending proxy) and change all three.
+
+### How a release reaches the instance
+
+```
+push to main (UI repo) ──► build + test ──► dist → s3://<bucket>/ui/<sha>.tar.gz
+                                                        │
+                                                 SSM Send-Command
+                                                        ▼
+                                          /opt/platform/deploy-ui.sh <sha>
+                                    unpack to ui/releases/<sha>, switch ui/current
+```
+
+The workflow lives in the UI repository, which also documents its GitHub side. `deploy-ui.sh`
+switches a symlink, so a UI deploy never restarts nginx or touches the API. It checks that nginx
+serves the new `index.html` before it reports success, and switches back if not.
+
+### One-time setup
+
+The order matters: nginx refuses to start on a server block whose certificate does not exist yet,
+and the API goes down with it. Issue the certificate before installing the template.
+
+1. **DNS.** An `A` record for the dashboard hostname pointing at the elastic IP.
+2. **Certificate**, with the stack running and no downtime (the port-80 server already answers
+   ACME challenges for any hostname):
+
+   ```bash
+   sudo /opt/platform/tls-add-domain.sh featureflag.example.com you@example.com
+   ```
+
+   The existing renewal cron job renews it along with the API's certificate.
+3. **Artifact bucket.** Private, in the instance's region. The lifecycle rule keeps it to recent
+   builds; the instance keeps the last five releases on disk anyway.
+
+   ```bash
+   aws s3api create-bucket --bucket <bucket> --region ap-south-2 \
+     --create-bucket-configuration LocationConstraint=ap-south-2
+   aws s3api put-public-access-block --bucket <bucket> --public-access-block-configuration \
+     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+   aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration \
+     '{"Rules":[{"ID":"expire-ui-builds","Status":"Enabled","Filter":{"Prefix":"ui/"},"Expiration":{"Days":90}}]}'
+   ```
+
+4. **Instance role** gets read access to the builds, beside its SSM parameter access:
+
+   ```json
+   {
+     "Effect": "Allow",
+     "Action": ["s3:GetObject"],
+     "Resource": "arn:aws:s3:::<bucket>/ui/*"
+   }
+   ```
+
+5. **Files and `.env`.** Install `nginx/ui.conf.template`, `deploy-ui.sh`, `tls-add-domain.sh` and
+   the updated `docker-compose.yml` as listed above, then add to `/opt/platform/.env`:
+
+   ```
+   UI_DOMAIN=featureflag.example.com
+   UI_ARTIFACT_BUCKET=<bucket>
+   APP_CLIENT_BASE_URL=https://featureflag.example.com
+   ```
+
+   `APP_CLIENT_BASE_URL` is where invitation emails link to (`/invitations/accept?token=…`).
+   The compose file refuses to run without `UI_DOMAIN`, so install it and the `.env` change
+   together.
+6. **Restart** with the running tag, which recreates nginx with the new template and the app with
+   the new client URL (a few seconds of API downtime, as with any deploy):
+
+   ```bash
+   sudo /opt/platform/deploy.sh "$(cat /opt/platform/.current-tag)"
+   ```
+
+7. **First release.** Run the UI repository's deploy workflow, or by hand once a build is in the
+   bucket: `sudo /opt/platform/deploy-ui.sh <sha>`.
+
+### CI identity
+
+The UI workflow authenticates with GitHub's OIDC token rather than stored keys (the upgrade the CI
+variables section above recommends for this pipeline). One-time, in IAM:
+
+- An identity provider for `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`.
+- A role the workflow assumes, trusted only for the UI repository's `production` environment:
+
+  ```json
+  {
+    "Effect": "Allow",
+    "Principal": { "Federated": "arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com" },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": "repo:vishva-thangaraj/featureflag-ui:environment:production"
+      }
+    }
+  }
+  ```
+
+- with only these permissions:
+
+  ```json
+  [
+    { "Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::<bucket>/ui/*" },
+    {
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ec2:ap-south-2:<account>:instance/<instance-id>",
+        "arn:aws:ssm:ap-south-2::document/AWS-RunShellScript"
+      ]
+    },
+    { "Effect": "Allow", "Action": "ssm:GetCommandInvocation", "Resource": "*" }
+  ]
+  ```
+
+### Rolling back the dashboard
+
+Re-run the workflow for an older commit, or on the instance:
+
+```bash
+sudo /opt/platform/deploy-ui.sh <older-sha>
+```
+
+Each deploy prints the exact rollback command. A release still on disk switches back instantly;
+older ones are fetched from the bucket while it still has them.
 
 ## Mail
 
