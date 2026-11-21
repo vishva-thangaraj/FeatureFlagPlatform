@@ -252,11 +252,19 @@ variables section above recommends for this pipeline). One-time, in IAM:
     "Condition": {
       "StringEquals": {
         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub": "repo:vishva-thangaraj/featureflag-ui:environment:production"
+        "token.actions.githubusercontent.com:sub": "repo:vishva-thangaraj@344654230/featureflag-ui@1440616039:environment:production"
       }
     }
   }
   ```
+
+  GitHub's subject carries the owner's and repository's numeric IDs (`owner@id/repo@id`), not
+  just their names. A trust policy written as `repo:vishva-thangaraj/featureflag-ui:...` matches
+  nothing, and the workflow's credentials step retries `AccessDenied` until it times out. The IDs
+  are `owner.id` and `id` from `https://api.github.com/repos/<owner>/<repo>`. They also mean a
+  deleted and recreated repository of the same name cannot assume the role. When in doubt, read
+  the subject GitHub actually sent from the failed `AssumeRoleWithWebIdentity` event in CloudTrail
+  (its `userIdentity.principalId`).
 
 - with only these permissions:
 
