@@ -51,8 +51,8 @@ docker compose up -d
 
 # --- verify ------------------------------------------------------------------
 # There is no actuator health endpoint in this application, so readiness is inferred:
-# nginx answers 502 while the app is down and something else once it is serving. Any
-# HTTP status from the API path means Spring is up and routing.
+# nginx answers 502 while the app is down and something else once it is serving. A 2xx or
+# 4xx from the API path means Spring is up and routing.
 # Probe over HTTPS, pinned to loopback with --resolve so the request carries the real
 # hostname (correct SNI, valid certificate, no DNS dependency) while never leaving the box.
 #
@@ -61,18 +61,24 @@ docker compose up -d
 # with a crash-looping application reported success. A redirect is explicitly NOT ready now.
 DOMAIN=$(grep -E '^API_DOMAIN=' "$APP_DIR/.env" 2>/dev/null | cut -d= -f2-)
 
+# Prints exactly one status code. When curl cannot connect it prints 000 through -w AND exits
+# non-zero, so an `|| echo 000` fallback printed a second one: "000000" matched no not-ready
+# pattern and a deploy reported success before the app had started. The fallback now only
+# covers curl printing nothing at all.
 probe() {
+  local code
   if [ -n "$DOMAIN" ]; then
-    curl -s -o /dev/null -w '%{http_code}' \
+    code=$(curl -s -o /dev/null -w '%{http_code}' \
       --resolve "$DOMAIN:443:127.0.0.1" \
       -X POST "https://$DOMAIN/api/v1/auth/login" \
-      -H 'Content-Type: application/json' -d '{}' 2>/dev/null || echo 000
+      -H 'Content-Type: application/json' -d '{}' 2>/dev/null) || true
   else
     # No domain configured yet (pre-TLS bootstrap): plain HTTP still reaches the app.
-    curl -s -o /dev/null -w '%{http_code}' \
+    code=$(curl -s -o /dev/null -w '%{http_code}' \
       -X POST http://localhost/api/v1/auth/login \
-      -H 'Content-Type: application/json' -d '{}' 2>/dev/null || echo 000
+      -H 'Content-Type: application/json' -d '{}' 2>/dev/null) || true
   fi
+  echo "${code:-000}"
 }
 
 log "waiting for the application to answer${DOMAIN:+ on https://$DOMAIN}"
@@ -81,16 +87,18 @@ for i in $(seq 1 30); do
   CODE=$(probe)
 
   case "$CODE" in
-    # 000 no connection · 5xx nginx cannot reach the app · 3xx only nginx answered
-    000|5??|3??)
-      sleep 5
-      ;;
-    *)
+    [24][0-9][0-9])
       # A 4xx here is success: the request reached Spring and was rejected on its merits
       # (the empty body fails validation), which is exactly what proves the app is serving.
       log "application responding (HTTP $CODE after $((i * 5))s)"
       READY=1
       break
+      ;;
+    *)
+      # 000 no connection · 5xx nginx cannot reach the app · 3xx only nginx answered.
+      # Anything that is not a 2xx/4xx status, including output we do not recognise, is
+      # not ready: an unknown answer must never pass a deploy.
+      sleep 5
       ;;
   esac
 done

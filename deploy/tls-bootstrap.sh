@@ -79,15 +79,22 @@ log "starting the stack with TLS (image tag: $TAG)"
 
 # deploy.sh proves the app answers over HTTP on localhost. Confirm TLS specifically, from
 # the public hostname, since that is the half this script is responsible for.
+# curl prints 000 itself when it cannot connect, so `|| true` rather than `|| echo 000`, which
+# produced "000000" and passed this check. Only a 2xx/4xx proves the request reached the API.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://$DOMAIN/api/v1/auth/login" \
-  -X POST -H 'Content-Type: application/json' -d '{}' || echo 000)
+  -X POST -H 'Content-Type: application/json' -d '{}') || true
+CODE="${CODE:-000}"
 
-if [ "$CODE" = "000" ]; then
-  log "WARNING: the app is up but HTTPS did not answer on $DOMAIN. nginx logs:"
-  docker compose logs --tail=40 nginx
-  exit 1
-fi
-log "HTTPS serving (HTTP $CODE from the API)"
+case "$CODE" in
+  [24][0-9][0-9])
+    log "HTTPS serving (HTTP $CODE from the API)"
+    ;;
+  *)
+    log "WARNING: the app is up but HTTPS on $DOMAIN did not reach it (HTTP $CODE). nginx logs:"
+    docker compose logs --tail=40 nginx
+    exit 1
+    ;;
+esac
 
 # --- 4. renewal --------------------------------------------------------------
 # A systemd timer that renews in webroot mode, so renewal needs no downtime: nginx keeps
