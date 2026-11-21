@@ -90,17 +90,11 @@ fi
 log "HTTPS serving (HTTP $CODE from the API)"
 
 # --- 4. renewal --------------------------------------------------------------
-# Webroot, so renewal needs no downtime: nginx keeps serving and certbot writes the
-# challenge into the directory nginx already exposes at /.well-known/acme-challenge/.
-# Twice daily is what Let's Encrypt recommends — renewal only acts inside the last 30 days,
-# and a single daily attempt gives one shot at a window that matters.
-log "installing the renewal timer"
-cat >/etc/cron.d/certbot-renew <<EOF
-0 3,15 * * * root docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/lib/letsencrypt:/var/lib/letsencrypt -v /var/www/certbot:/var/www/certbot certbot/certbot renew --webroot -w /var/www/certbot --quiet && cd $APP_DIR && docker compose exec -T nginx nginx -s reload
-EOF
-chmod 644 /etc/cron.d/certbot-renew
+# A systemd timer that renews in webroot mode, so renewal needs no downtime: nginx keeps
+# serving and certbot writes the challenge into the directory nginx already exposes at
+# /.well-known/acme-challenge/. See tls-renewal.sh for why it is not a cron job.
+"$APP_DIR/tls-renewal.sh"
 
-log "done. Certificate renews automatically; expiry notices go to $EMAIL."
-log "Verify the renewal path works BEFORE trusting it:"
-log "  docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/www/certbot:/var/www/certbot \\"
-log "    certbot/certbot renew --webroot -w /var/www/certbot --dry-run"
+log "done. Let's Encrypt sends no expiry emails, so verify the renewal path works now:"
+log "  docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/lib/letsencrypt:/var/lib/letsencrypt \\"
+log "    -v /var/www/certbot:/var/www/certbot certbot/certbot renew --webroot -w /var/www/certbot --dry-run"

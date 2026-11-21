@@ -73,9 +73,9 @@ server {
 
     # React frontend — static build files.
     #
-    # This repository does not contain a frontend build, so with nothing mounted at
-    # /usr/share/nginx/html these locations return 404. That is expected when only the API
-    # is deployed; the dashboard is a separate project.
+    # Not used in production: the dashboard is served on its own hostname by
+    # nginx/ui.conf.template, so nothing is mounted at /usr/share/nginx/html and this host
+    # serves only the image's placeholder page outside /api/.
     location / {
         root /usr/share/nginx/html;
 
