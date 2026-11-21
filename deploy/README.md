@@ -252,11 +252,19 @@ variables section above recommends for this pipeline). One-time, in IAM:
     "Condition": {
       "StringEquals": {
         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub": "repo:vishva-thangaraj/featureflag-ui:environment:production"
+        "token.actions.githubusercontent.com:sub": "repo:vishva-thangaraj@344654230/featureflag-ui@1440616039:environment:production"
       }
     }
   }
   ```
+
+  GitHub's subject carries the owner's and repository's numeric IDs (`owner@id/repo@id`), not
+  just their names. A trust policy written as `repo:vishva-thangaraj/featureflag-ui:...` matches
+  nothing, and the workflow's credentials step retries `AccessDenied` until it times out. The IDs
+  are `owner.id` and `id` from `https://api.github.com/repos/<owner>/<repo>`. They also mean a
+  deleted and recreated repository of the same name cannot assume the role. When in doubt, read
+  the subject GitHub actually sent from the failed `AssumeRoleWithWebIdentity` event in CloudTrail
+  (its `userIdentity.principalId`).
 
 - with only these permissions:
 
@@ -288,16 +296,45 @@ older ones are fetched from the bucket while it still has them.
 
 ## Mail
 
-SES needs the domain verified before it will leave the sandbox:
+Invitations go out through SES in **Mumbai (`ap-south-1`)**, not the instance's own region.
+SES has no SMTP endpoint in Hyderabad (`ap-south-2`): `email-smtp.ap-south-2.amazonaws.com` does
+not exist in DNS, so a `MAIL_HOST` pointing there fails on every send. That went unnoticed until
+2026-11-21, because the send runs on a background thread after the API has already answered.
 
-1. SES → Verified identities → verify the **domain**, and publish the DKIM records it gives you
-2. SES → SMTP settings → create SMTP credentials (not IAM keys)
-3. SES → Account dashboard → **request production access**
+The SMTP credentials are an SES Mail Manager **authenticated ingress endpoint**, which is what the
+SES console's "Create SMTP credentials" now creates. Its rule set has a single "send to internet"
+action. The endpoint itself is free; mail costs $0.15 per 1,000 messages. In `/opt/platform/.env`:
 
-Until that request is granted, SES delivers only to individually verified addresses.
-Invitations to anyone else are rejected — and because mail is sent on a background thread,
-**the API still returns success** and the failure appears only in the application log. Do not
-read a 200 as "the invitation was delivered" while still in the sandbox.
+```
+MAIL_HOST=<the endpoint's A record, e.g. g8geqz6zrndv.hkph.mail-manager-smtp.amazonaws.com>
+MAIL_PORT=587
+MAIL_STARTTLS=true
+MAIL_USERNAME=<the ingress endpoint ID, inp-...>
+MAIL_PASSWORD='<the password set when the endpoint was created>'
+APP_MAIL_FROM=hello@yourdomain.com
+```
+
+Keep the password in single quotes. Compose interpolates `$` in unquoted `.env` values, and the
+endpoint requires a special character, so an unquoted password can arrive at the app mangled. The
+password cannot be read back from AWS; reset it on the endpoint's page in the console if lost.
+
+Identities are per region, so the domain must be verified in Mumbai itself, with that region's
+DKIM records (`<token>._domainkey` CNAMEs to `<token>.dkim.amazonses.com`), even though it is also
+verified in Hyderabad. Then:
+
+1. Mail Manager → Ingress endpoints shows the endpoint's A record and ID
+2. SES (Mumbai) → Account dashboard → **request production access**
+
+Until that request is granted, SES delivers only to verified identities: addresses on the
+verified domain, or individually verified addresses. Invitations to anyone else are rejected,
+and because mail is sent on a background thread, **the API still returns success**. Read the
+application log, not the 200: a delivered invitation logs `Invitation email sent to <address>`.
+
+To check the credentials without sending anything, log in from the instance:
+
+```bash
+python3 -c 'import smtplib,ssl; s=smtplib.SMTP("<host>",587); s.starttls(context=ssl.create_default_context()); print(s.login("<inp-id>", input("password: ")))'
+```
 
 ## Deploying
 
