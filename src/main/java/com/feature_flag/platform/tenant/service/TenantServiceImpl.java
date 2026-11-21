@@ -196,10 +196,11 @@ public class TenantServiceImpl implements TenantService {
      * </ol>
      *
      * <p>Every step is a single bulk statement: a tenant with thousands of features is deleted in a fixed
-     * number of queries and none of its rows is loaded into memory. The flip side of bulk JPQL is that it
-     * neither cascades nor updates the persistence context, which is why {@code membership_roles} is
-     * deleted explicitly (Hibernate would otherwise have done it on entity removal) and why every query is
-     * declared {@code flushAutomatically}/{@code clearAutomatically}.
+     * number of queries and none of its rows is loaded into memory. The one exception is the refresh-token
+     * detach, which reads ids first and updates in batches (MySQL error 1093). The flip side of bulk JPQL
+     * is that it neither cascades nor updates the persistence context, which is why
+     * {@code membership_roles} is deleted explicitly (Hibernate would otherwise have done it on entity
+     * removal) and why every query is declared {@code flushAutomatically}/{@code clearAutomatically}.
      *
      * <p>{@code REQUIRED} with no {@code noRollbackFor}: all of it commits or none of it does. A tenant
      * left half-deleted — flags gone, memberships still granting access — is worse than one that refused
