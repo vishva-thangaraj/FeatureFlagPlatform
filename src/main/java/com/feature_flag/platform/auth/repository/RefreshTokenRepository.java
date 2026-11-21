@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -47,6 +48,17 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Query("UPDATE RefreshToken rt SET rt.revoked = true WHERE rt.id = :tokenId AND rt.revoked = false")
     int revokeByIdInNewTransaction(@Param("tokenId") Long tokenId);
 
+    /** Most ids {@link #detachReplacementChainsByTenantId(Long)} binds into one {@code in} list. */
+    int DETACH_BATCH_SIZE = 1000;
+
+    /** Tokens, in any tenant, whose replacement belongs to {@code tenantId}. */
+    @Query("select rt.id from RefreshToken rt where rt.replacedBy.tenant.id = :tenantId")
+    List<Long> findIdsWithReplacementInTenant(@Param("tenantId") Long tenantId);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update RefreshToken rt set rt.replacedBy = null where rt.id in :ids")
+    int detachReplacementsByIds(@Param("ids") Collection<Long> ids);
+
     /**
      * Breaks the {@code replaced_by} self-reference before a tenant's refresh tokens are deleted.
      *
@@ -54,13 +66,19 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * checks that self-FK row by row, so whether it survives depends on the order the database happens to
      * remove them in; nulling the pointers first makes the delete order-independent. It also releases any
      * token outside the tenant that points into it.
+     *
+     * <p>Select first, then update: MySQL rejects an UPDATE whose subquery reads the table being updated
+     * (error 1093). Nothing pins how many tokens a tenant accumulates, so the update runs in batches.
      */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
-    @Query("""
-            update RefreshToken rt set rt.replacedBy = null
-            where rt.replacedBy.id in (select r.id from RefreshToken r where r.tenant.id = :tenantId)
-            """)
-    int detachReplacementChainsByTenantId(@Param("tenantId") Long tenantId);
+    default int detachReplacementChainsByTenantId(Long tenantId) {
+        List<Long> ids = findIdsWithReplacementInTenant(tenantId);
+        int detached = 0;
+        for (int from = 0; from < ids.size(); from += DETACH_BATCH_SIZE) {
+            int to = Math.min(from + DETACH_BATCH_SIZE, ids.size());
+            detached += detachReplacementsByIds(ids.subList(from, to));
+        }
+        return detached;
+    }
 
     /**
      * Tenant-deletion cascade. {@code refresh_tokens.tenant_id} is a foreign key to {@code tenants} and
