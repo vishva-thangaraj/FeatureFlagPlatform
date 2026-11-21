@@ -155,6 +155,12 @@ class TenantDeletionCascadeIntegrationTest {
                 .roles(new HashSet<>(Set.of(role))).build());
     }
 
+    private RefreshToken refreshToken(Tenant tenant, String hash) {
+        return refreshTokenRepository.save(RefreshToken.builder()
+                .user(owner).tenant(tenant).tokenHash(hash)
+                .expiresAt(Instant.now().plusSeconds(3600)).build());
+    }
+
     /**
      * Gives {@code tenant} one of every tenant-owned row: two features x two envs of statuses, each status
      * carrying a rule and a user override, plus invitations, API keys and a live refresh token.
@@ -294,6 +300,35 @@ class TenantDeletionCascadeIntegrationTest {
         assertTrue(envRepository.findAllByTenantId(tenantId).isEmpty());
         assertTrue(featureEnvStatusRepository.findAllByFeatureId(loadedFeatureAId).isEmpty());
         assertEquals(0, count("feature_env_status", "env_id", loadedEnvProdId));
+    }
+
+    /**
+     * A chain A→B→C, plus a neighbour's token pointing into it: the pointer is released, not followed, and
+     * the neighbour's own chain is untouched. RefreshTokenRepositoryMySqlTest covers the same on MySQL.
+     */
+    @Test
+    void deletingATenantDetachesItsRotationChainAndPointersIntoIt() throws Exception {
+        Long tenantId = loadedTenant.getId();
+        RefreshToken a = refreshToken(loadedTenant, "chain-a");
+        RefreshToken b = refreshToken(loadedTenant, "chain-b");
+        RefreshToken c = refreshToken(loadedTenant, "chain-c");
+        a.setReplacedBy(b);
+        b.setReplacedBy(c);
+        RefreshToken intoLoaded = refreshToken(neighbourTenant, "into-loaded");
+        intoLoaded.setReplacedBy(a);
+        refreshTokenRepository.saveAll(List.of(a, b, intoLoaded));
+
+        mockMvc.perform(authorized(delete("/api/v1/tenants/" + tenantId), ownerToken))
+                .andExpect(status().isNoContent());
+
+        assertEquals(0, count("refresh_tokens", "tenant_id", tenantId));
+        assertEquals(3, count("refresh_tokens", "tenant_id", neighbourTenant.getId()));
+        assertEquals(0, ((Number) entityManager.createNativeQuery(
+                        "select count(*) from refresh_tokens where replaced_by is not null and id = :id")
+                .setParameter("id", intoLoaded.getId()).getSingleResult()).longValue());
+        assertEquals(1, ((Number) entityManager.createNativeQuery(
+                        "select count(*) from refresh_tokens where replaced_by is not null and tenant_id = :id")
+                .setParameter("id", neighbourTenant.getId()).getSingleResult()).longValue());
     }
 
     /** A brand-new tenant has no children at all; the cascade must not trip over the empty sets. */
