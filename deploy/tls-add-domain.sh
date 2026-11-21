@@ -3,7 +3,7 @@
 # Issues a Let's Encrypt certificate for one more hostname on an instance whose stack is already
 # serving TLS. Run once per hostname, on the instance, from /opt/platform:
 #
-#   sudo ./tls-add-domain.sh featureflag.yourdomain.com you@yourdomain.com
+#   sudo ./tls-add-domain.sh featureflag.yourdomain.com [email]
 #
 # Unlike tls-bootstrap.sh this needs no downtime. The HTTP server in prod.conf.template is nginx's
 # default server for port 80, so it already serves /.well-known/acme-challenge/ from
@@ -11,13 +11,17 @@
 # server block for the new name. Issue the certificate first, then add the block that loads it:
 # nginx refuses to start on a server block whose certificate does not exist.
 #
-# Renewal needs nothing new. The cron job tls-bootstrap.sh installed runs `certbot renew --webroot`,
-# which renews every certificate under /etc/letsencrypt, this one included, and reloads nginx.
+# Renewal: the systemd timer from tls-renewal.sh renews every certificate under /etc/letsencrypt,
+# this one included. This script (re)installs it at the end, so running it is enough either way.
+#
+# The email is optional. Let's Encrypt no longer sends expiry notices, and an instance that already
+# has an ACME account (from tls-bootstrap.sh) keeps using it.
 
 set -euo pipefail
 
-DOMAIN="${1:?usage: tls-add-domain.sh <hostname> <email-for-expiry-notices>}"
-EMAIL="${2:?usage: tls-add-domain.sh <hostname> <email-for-expiry-notices>}"
+DOMAIN="${1:?usage: tls-add-domain.sh <hostname> [email]}"
+EMAIL="${2:-}"
+APP_DIR=/opt/platform
 WEBROOT=/var/www/certbot
 
 log() { echo "[tls] $*"; }
@@ -56,6 +60,12 @@ fi
 log "challenge directory is served for $DOMAIN"
 
 # --- 2. issue the certificate ------------------------------------------------
+if [ -n "$EMAIL" ]; then
+  CONTACT=(--email "$EMAIL")
+else
+  CONTACT=(--register-unsafely-without-email)
+fi
+
 log "requesting a certificate for $DOMAIN"
 docker run --rm \
   -v /etc/letsencrypt:/etc/letsencrypt \
@@ -65,7 +75,7 @@ docker run --rm \
     --webroot -w "$WEBROOT" \
     --non-interactive \
     --agree-tos \
-    --email "$EMAIL" \
+    "${CONTACT[@]}" \
     -d "$DOMAIN"
 
 if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
@@ -73,3 +83,6 @@ if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
   exit 1
 fi
 log "certificate issued at /etc/letsencrypt/live/$DOMAIN/"
+
+# --- 3. renewal --------------------------------------------------------------
+"$APP_DIR/tls-renewal.sh"

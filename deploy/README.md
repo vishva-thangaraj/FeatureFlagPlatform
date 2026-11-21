@@ -29,6 +29,7 @@ keeps no inbound rule for deployment at all, and the runner authenticates to AWS
 ├── deploy-ui.sh           ← deploy/deploy-ui.sh     (root:root, 755)
 ├── tls-bootstrap.sh       ← deploy/tls-bootstrap.sh  (root:root, 755)
 ├── tls-add-domain.sh      ← deploy/tls-add-domain.sh (root:root, 755)
+├── tls-renewal.sh         ← deploy/tls-renewal.sh   (root:root, 755)
 ├── .env                   ← non-secret config       (ec2-user, 600)
 ├── nginx/prod.conf.template  ← nginx/prod.conf.template
 ├── nginx/ui.conf.template    ← nginx/ui.conf.template
@@ -115,18 +116,24 @@ sudo API_DOMAIN=api.yourdomain.com /opt/platform/tls-bootstrap.sh you@yourdomain
 That script exists because of a loop: nginx is configured to load a certificate that does
 not exist yet, so it will not start — and certbot's webroot mode needs nginx already
 serving. It issues the first certificate in **standalone** mode with port 80 free, before
-nginx starts, then installs a twice-daily **webroot** renewal that needs no downtime.
+nginx starts, then runs [`tls-renewal.sh`](tls-renewal.sh), which installs a twice-daily
+systemd timer that renews in **webroot** mode and needs no downtime.
+
+It is a systemd timer because Amazon Linux 2023 has no cron. An earlier version of the script
+wrote `/etc/cron.d/certbot-renew`, which failed after the certificate was issued, and the first
+production certificate went without any renewal until the timer replaced it.
 
 It also checks that the domain resolves to this host first, because certbot's own failure in
 that case complains about authorization rather than DNS and sends people looking in the wrong
 place.
 
-**Confirm renewal works before trusting it** — a silent renewal failure surfaces as an
-expired certificate 90 days later:
+**Confirm renewal works before trusting it.** Let's Encrypt no longer sends expiry emails, so a
+silent renewal failure surfaces only as an expired certificate:
 
 ```bash
-docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/www/certbot:/var/www/certbot \
-  certbot/certbot renew --webroot -w /var/www/certbot --dry-run
+systemctl list-timers certbot-renew.timer
+docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/lib/letsencrypt:/var/lib/letsencrypt \
+  -v /var/www/certbot:/var/www/certbot certbot/certbot renew --webroot -w /var/www/certbot --dry-run
 ```
 
 Two notes on the config:
@@ -175,14 +182,16 @@ The order matters: nginx refuses to start on a server block whose certificate do
 and the API goes down with it. Issue the certificate before installing the template.
 
 1. **DNS.** An `A` record for the dashboard hostname pointing at the elastic IP.
-2. **Certificate**, with the stack running and no downtime (the port-80 server already answers
-   ACME challenges for any hostname):
+2. **Certificate.** Install `tls-add-domain.sh` and `tls-renewal.sh` as listed above, then issue
+   it with the stack running and no downtime (the port-80 server already answers ACME
+   challenges for any hostname):
 
    ```bash
-   sudo /opt/platform/tls-add-domain.sh featureflag.example.com you@example.com
+   sudo /opt/platform/tls-add-domain.sh featureflag.example.com
    ```
 
-   The existing renewal cron job renews it along with the API's certificate.
+   It finishes by (re)installing the renewal timer, which renews this certificate along with
+   the API's.
 3. **Artifact bucket.** Private, in the instance's region. The lifecycle rule keeps it to recent
    builds; the instance keeps the last five releases on disk anyway.
 
@@ -205,7 +214,7 @@ and the API goes down with it. Issue the certificate before installing the templ
    }
    ```
 
-5. **Files and `.env`.** Install `nginx/ui.conf.template`, `deploy-ui.sh`, `tls-add-domain.sh` and
+5. **Files and `.env`.** Install `nginx/ui.conf.template`, `deploy-ui.sh` and
    the updated `docker-compose.yml` as listed above, then add to `/opt/platform/.env`:
 
    ```
