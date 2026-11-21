@@ -75,15 +75,23 @@ services:
       - "443:443"
     environment:
       API_DOMAIN: ${API_DOMAIN}
-      # Restricts envsubst to API_DOMAIN alone. Without it, envsubst also substitutes
-      # nginx's own $$host, $$uri and $$proxy_add_x_forwarded_for with empty strings —
-      # which breaks proxying and, less obviously, the client-IP header the rate limiter
-      # reads. The config would still load; it would just be wrong.
-      NGINX_ENVSUBST_FILTER: "API_DOMAIN"
+      # The dashboard's hostname (nginx/ui.conf.template). Required: left empty, the template
+      # renders a certificate path of /etc/letsencrypt/live//, nginx refuses to start, and the
+      # API goes down with it. Failing here instead stops the deploy with the old stack running.
+      UI_DOMAIN: ${UI_DOMAIN:?UI_DOMAIN must be set in .env - see deploy/README.md, Dashboard}
+      # Restricts envsubst to these two names (it is a regex over variable names). Without it,
+      # envsubst also substitutes nginx's own $$host, $$uri and $$proxy_add_x_forwarded_for
+      # with empty strings — which breaks proxying and, less obviously, the client-IP header
+      # the rate limiter reads. The config would still load; it would just be wrong.
+      NGINX_ENVSUBST_FILTER: "^(API_DOMAIN|UI_DOMAIN)$$"
     volumes:
-      # Mounted as a template, not a conf: the image renders /etc/nginx/templates/*.template
-      # into /etc/nginx/conf.d/ at start, substituting API_DOMAIN.
+      # Mounted as templates, not confs: the image renders /etc/nginx/templates/*.template
+      # into /etc/nginx/conf.d/ at start. That happens only at start, so after editing a
+      # template run `docker compose restart nginx`; `nginx -s reload` keeps the old render.
       - ./nginx/prod.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/ui.conf.template:/etc/nginx/templates/ui.conf.template:ro
+      # Dashboard releases, switched by deploy-ui.sh through the relative `current` symlink.
+      - ./ui:/srv/ui:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/certbot:/var/www/certbot:ro
     depends_on:
